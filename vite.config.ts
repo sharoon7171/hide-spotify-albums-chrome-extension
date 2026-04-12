@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
@@ -21,7 +22,7 @@ function copyExtensionRootFiles(): Plugin {
 
 export default defineConfig({
   base: "./",
-  plugins: [react(), copyExtensionRootFiles()],
+  plugins: [tailwindcss(), react(), copyExtensionRootFiles()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
