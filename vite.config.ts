@@ -35,13 +35,11 @@ export default defineConfig({
     rollupOptions: {
       input: {
         background: path.resolve(__dirname, "src/background/index.ts"),
-        content: path.resolve(__dirname, "src/content/index.ts"),
         options: path.resolve(__dirname, "options.html"),
       },
       output: {
-        entryFileNames(chunk) {
+        entryFileNames(chunk: { name: string | undefined }) {
           if (chunk.name === "background") return "background.js";
-          if (chunk.name === "content") return "content.js";
           if (chunk.name === "options") return "options.js";
           return "[name].js";
         },

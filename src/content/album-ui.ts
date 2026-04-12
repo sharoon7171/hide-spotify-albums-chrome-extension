@@ -1,26 +1,24 @@
 import {
-  buttonIsHidden,
-  buttonNotHidden,
-  hostChromeStyle,
-  hostInnerStyle,
-} from "@/content/injected-hide-button-styles";
+  albumIdFromSavedAlbum,
+  getSavedAlbums,
+  SAVED_ALBUMS_KEY,
+  setSavedAlbums,
+  type SavedAlbum,
+} from "@/lib/saved-albums";
+import {
+  albumIdFromPathname,
+  normalizeOpenSpotifyAlbumUrl,
+} from "@/lib/spotify-album-url";
+import {
+  hideButtonShadowCss,
+  iconSvgEye,
+  iconSvgEyeOff,
+} from "@/content/hide-button-styles";
 
-const STORAGE_KEY = "savedAlbums";
 const HOST_ID = "spotify-customization-album-host";
-
-type StoredAlbum = { id: string; title: string; savedAt: number };
-
-function albumIdFromPathname(pathname: string): string | null {
-  const m = pathname.match(/\/album\/([^/?#]+)/);
-  return m ? m[1] : null;
-}
 
 function currentAlbumId(): string | null {
   return albumIdFromPathname(location.pathname);
-}
-
-function isAlbumPath(pathname: string): boolean {
-  return /\/album\/[^/?#]+/.test(pathname);
 }
 
 function readAlbumTitle(): string {
@@ -32,49 +30,43 @@ function readAlbumTitle(): string {
   return head.replace(/\s*\|\s*Spotify\s*$/i, "").trim();
 }
 
-async function loadList(): Promise<StoredAlbum[]> {
-  const r = await chrome.storage.local.get(STORAGE_KEY);
-  const v = r[STORAGE_KEY];
-  return Array.isArray(v) ? (v as StoredAlbum[]) : [];
-}
-
 async function isInHiddenList(id: string): Promise<boolean> {
-  const list = await loadList();
-  return list.some((a) => a.id === id);
+  const list = await getSavedAlbums();
+  return list.some((a) => albumIdFromSavedAlbum(a) === id);
 }
 
-async function addToHiddenList(id: string, title: string): Promise<void> {
-  const list = await loadList();
-  const next = list.filter((a) => a.id !== id);
-  next.push({ id, title, savedAt: Date.now() });
-  await chrome.storage.local.set({ [STORAGE_KEY]: next });
+async function addToHiddenList(entry: SavedAlbum): Promise<void> {
+  const list = await getSavedAlbums();
+  const nid = albumIdFromSavedAlbum(entry);
+  if (!nid) {
+    await setSavedAlbums([
+      ...list.filter((a) => a.title !== entry.title),
+      entry,
+    ]);
+    return;
+  }
+  await setSavedAlbums([
+    ...list.filter((a) => albumIdFromSavedAlbum(a) !== nid),
+    entry,
+  ]);
 }
 
 async function removeFromHiddenList(id: string): Promise<void> {
-  const list = await loadList();
-  await chrome.storage.local.set({
-    [STORAGE_KEY]: list.filter((a) => a.id !== id),
-  });
+  const list = await getSavedAlbums();
+  await setSavedAlbums(list.filter((a) => albumIdFromSavedAlbum(a) !== id));
 }
 
 function removeHost(): void {
   document.getElementById(HOST_ID)?.remove();
 }
 
-function findAddToLibraryButton(): HTMLElement | null {
+function attachHideButtonHost(host: HTMLElement): boolean {
   const bar = document.querySelector(
     "main [data-testid=\"action-bar-row\"]",
   );
-  const add = bar?.querySelector("[data-testid=\"add-button\"]");
-  return add instanceof HTMLElement ? add : null;
-}
-
-function attachAfterAddToLibrary(host: HTMLElement): boolean {
-  const add = findAddToLibraryButton();
-  if (!add) return false;
-  host.style.cssText = hostChromeStyle;
-  if (host.previousElementSibling !== add) {
-    add.insertAdjacentElement("afterend", host);
+  if (!bar) return false;
+  if (host.parentElement !== bar) {
+    bar.appendChild(host);
   }
   return true;
 }
@@ -83,7 +75,8 @@ function applyHideButtonPresentation(
   btn: HTMLButtonElement,
   albumIsHidden: boolean,
 ): void {
-  btn.style.cssText = albumIsHidden ? buttonIsHidden : buttonNotHidden;
+  btn.classList.remove("ext-btn--hide", "ext-btn--unhide");
+  btn.classList.add("ext-btn", albumIsHidden ? "ext-btn--unhide" : "ext-btn--hide");
 }
 
 async function refreshHideToggle(): Promise<void> {
@@ -94,14 +87,21 @@ async function refreshHideToggle(): Promise<void> {
   const btn = host.shadowRoot.querySelector(
     "[data-role=\"hide-list-button\"]",
   ) as HTMLButtonElement | null;
-  if (!btn) return;
+  const icon = host.shadowRoot.querySelector(
+    "[data-role=\"hide-list-icon\"]",
+  ) as HTMLElement | null;
+  const label = host.shadowRoot.querySelector(
+    "[data-role=\"hide-list-label\"]",
+  ) as HTMLElement | null;
+  if (!btn || !icon || !label) return;
   const inList = await isInHiddenList(id);
-  btn.textContent = inList ? "Unhide" : "Hide";
+  label.textContent = inList ? "Unhide" : "Hide";
+  icon.innerHTML = inList ? iconSvgEye : iconSvgEyeOff;
   btn.setAttribute(
     "aria-label",
     inList
-      ? "Show this album on Spotify again by removing its album ID from this extension"
-      : "Hide this album on Spotify by saving its album ID in this extension",
+      ? "Show this album on Spotify again by removing it from this extension"
+      : "Hide this album on Spotify by saving its album URL in this extension",
   );
   applyHideButtonPresentation(btn, inList);
 }
@@ -111,31 +111,56 @@ function buildHostShell(): HTMLDivElement {
   host.id = HOST_ID;
 
   const shadow = host.attachShadow({ mode: "open" });
+  const style = document.createElement("style");
+  style.textContent = hideButtonShadowCss;
+  shadow.appendChild(style);
   const wrap = document.createElement("div");
-  wrap.style.cssText = hostInnerStyle;
+  wrap.className = "ext-wrap";
   const btn = document.createElement("button");
   btn.type = "button";
   btn.dataset.role = "hide-list-button";
+  const icon = document.createElement("span");
+  icon.className = "ext-btn__icon";
+  icon.dataset.role = "hide-list-icon";
+  const label = document.createElement("span");
+  label.className = "ext-btn__label";
+  label.dataset.role = "hide-list-label";
+  btn.append(icon, label);
   wrap.appendChild(btn);
   shadow.appendChild(wrap);
 
+  let actionBusy = false;
   btn.addEventListener("click", async () => {
+    if (actionBusy) return;
     const clickId = currentAlbumId();
     if (!clickId) return;
-    const inList = await isInHiddenList(clickId);
-    if (inList) {
-      await removeFromHiddenList(clickId);
-    } else {
-      await addToHiddenList(clickId, readAlbumTitle());
+    actionBusy = true;
+    btn.disabled = true;
+    try {
+      const inList = await isInHiddenList(clickId);
+      if (inList) {
+        await removeFromHiddenList(clickId);
+      } else {
+        const url = normalizeOpenSpotifyAlbumUrl(location.href);
+        if (!url) return;
+        await addToHiddenList({
+          savedAt: Date.now(),
+          url,
+          title: readAlbumTitle(),
+        });
+      }
+      await refreshHideToggle();
+    } finally {
+      actionBusy = false;
+      btn.disabled = false;
     }
-    await refreshHideToggle();
   });
 
   return host;
 }
 
 async function ensureHideToggle(): Promise<void> {
-  if (!isAlbumPath(location.pathname)) {
+  if (!albumIdFromPathname(location.pathname)) {
     removeHost();
     return;
   }
@@ -150,7 +175,7 @@ async function ensureHideToggle(): Promise<void> {
     host = buildHostShell();
   }
   host.dataset.albumId = id;
-  if (!attachAfterAddToLibrary(host)) {
+  if (!attachHideButtonHost(host)) {
     if (!document.documentElement.contains(host)) {
       host.remove();
     }
@@ -174,19 +199,33 @@ const scheduleSync = debounce(() => {
   syncAlbumPageUi();
 }, 160);
 
+let moMain: MutationObserver | null = null;
+let mainObservedEl: Element | null = null;
+
+function disconnectMainObserver(): void {
+  moMain?.disconnect();
+  moMain = null;
+}
+
+function updateAlbumObservers(): void {
+  if (!albumIdFromPathname(location.pathname)) {
+    disconnectMainObserver();
+    mainObservedEl = null;
+    return;
+  }
+  const main = document.querySelector("main");
+  if (!main) return;
+  if (mainObservedEl === main && moMain) return;
+  disconnectMainObserver();
+  mainObservedEl = main;
+  moMain = new MutationObserver(() => scheduleSync());
+  moMain.observe(main, { childList: true, subtree: true });
+}
+
 function observeSpotifyDom(): void {
   const run = () => scheduleSync();
-  const moMain = new MutationObserver(run);
-  const attachMain = (main: Element) => {
-    moMain.disconnect();
-    moMain.observe(main, { childList: true, subtree: true });
-  };
-  const main0 = document.querySelector("main");
-  if (main0) attachMain(main0);
-
   const moBody = new MutationObserver(() => {
-    const m = document.querySelector("main");
-    if (m) attachMain(m);
+    updateAlbumObservers();
     run();
   });
   moBody.observe(document.body, { childList: true, subtree: true });
@@ -200,9 +239,21 @@ function observeSpotifyDom(): void {
       characterData: true,
     });
   }
+  updateAlbumObservers();
+}
+
+function attachNavigationSync(): void {
+  const w = window as Window & { navigation?: EventTarget };
+  const n = w.navigation;
+  if (n && typeof n.addEventListener === "function") {
+    n.addEventListener("navigate", () =>
+      queueMicrotask(() => syncAlbumPageUi()),
+    );
+  }
 }
 
 export function syncAlbumPageUi(): void {
+  updateAlbumObservers();
   void ensureHideToggle();
 }
 
@@ -229,20 +280,14 @@ export function ensureAlbumPageIntegration(): void {
   if (!w[INIT_KEY]) {
     w[INIT_KEY] = true;
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local" || !changes[STORAGE_KEY]) return;
+      if (area !== "local" || !changes[SAVED_ALBUMS_KEY]) return;
       void refreshHideToggle();
     });
     patchHistory("pushState");
     patchHistory("replaceState");
     window.addEventListener("popstate", () => syncAlbumPageUi());
     observeSpotifyDom();
-    let lastPath = location.pathname;
-    setInterval(() => {
-      if (location.pathname !== lastPath) {
-        lastPath = location.pathname;
-        syncAlbumPageUi();
-      }
-    }, 400);
+    attachNavigationSync();
   }
   syncAlbumPageUi();
 }

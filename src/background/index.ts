@@ -1,7 +1,19 @@
 import { registerActionClick } from "./on-action-click";
-import { registerOnInstalled } from "./on-installed";
-import { registerSpotifyAlbumToggleInjection } from "./spotify-album-toggle-inject";
+import { openOptionsPage } from "./open-options";
+import {
+  ensureSpotifyContentScriptsRegistered,
+  registerSpotifyContentScripts,
+} from "./register-spotify-content-scripts";
 
-registerOnInstalled();
+void ensureSpotifyContentScriptsRegistered().catch(() => {
+  void registerSpotifyContentScripts();
+});
+
+chrome.runtime.onInstalled.addListener((details) => {
+  void registerSpotifyContentScripts();
+  if (details.reason === "install" || details.reason === "update") {
+    openOptionsPage();
+  }
+});
+
 registerActionClick();
-registerSpotifyAlbumToggleInjection();

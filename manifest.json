@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Spotify Customization",
   "version": "1.0.0",
-  "description": "Store Spotify album IDs to hide or show albums on open.spotify.com. More options coming in a later update.",
-  "permissions": ["storage", "scripting", "webNavigation"],
+  "description": "Hide albums on open.spotify.com using stored album URLs from the in-player Hide control.",
+  "permissions": ["storage", "scripting"],
   "host_permissions": ["https://open.spotify.com/*"],
   "action": {
     "default_title": "Spotify Customization — open options"
