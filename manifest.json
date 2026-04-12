@@ -3,9 +3,6 @@
   "name": "Chrome Extension Vite React MV3 Template",
   "version": "1.0.0",
   "description": "Template: Manifest V3, Vite, React, TypeScript, Tailwind. Rename in package.json and here after fork.",
-  "action": {
-    "default_popup": "popup.html"
-  },
   "options_page": "options.html",
   "background": {
     "service_worker": "background.js",
