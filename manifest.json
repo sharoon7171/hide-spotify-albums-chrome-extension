@@ -1,21 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Chrome Extension Vite React MV3 Template",
+  "name": "Spotify Customization",
   "version": "1.0.0",
-  "description": "Template: Manifest V3, Vite, React, TypeScript, Tailwind. Rename in package.json and here after fork.",
+  "description": "Store Spotify album IDs to hide or show albums on open.spotify.com. More options coming in a later update.",
+  "permissions": ["storage", "scripting", "webNavigation"],
+  "host_permissions": ["https://open.spotify.com/*"],
   "action": {
-    "default_title": "Open options"
+    "default_title": "Spotify Customization — open options"
   },
   "options_page": "options.html",
   "background": {
     "service_worker": "background.js",
     "type": "module"
-  },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ]
+  }
 }

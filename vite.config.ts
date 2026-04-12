@@ -5,7 +5,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
 function copyExtensionRootFiles(): Plugin {
-  const names = ["manifest.json", "options.html"];
+  const names = ["manifest.json"];
   return {
     name: "copy-extension-root-files",
     writeBundle() {
@@ -36,15 +36,17 @@ export default defineConfig({
       input: {
         background: path.resolve(__dirname, "src/background/index.ts"),
         content: path.resolve(__dirname, "src/content/index.ts"),
+        options: path.resolve(__dirname, "options.html"),
       },
       output: {
         entryFileNames(chunk) {
           if (chunk.name === "background") return "background.js";
           if (chunk.name === "content") return "content.js";
-          return "[name]-[hash].js";
+          if (chunk.name === "options") return "options.js";
+          return "[name].js";
         },
-        chunkFileNames: "[name]-[hash].js",
-        assetFileNames: "[name]-[hash][extname]",
+        chunkFileNames: "[name].js",
+        assetFileNames: "[name][extname]",
       },
     },
   },
