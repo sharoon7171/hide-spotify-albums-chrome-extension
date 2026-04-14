@@ -65,6 +65,15 @@ function attachHideButtonHost(host: HTMLElement): boolean {
     "main [data-testid=\"action-bar-row\"]",
   );
   if (!bar) return false;
+  const more = bar.querySelector<HTMLElement>(
+    "[data-testid=\"more-button\"]",
+  );
+  if (more) {
+    if (more.nextElementSibling !== host) {
+      more.insertAdjacentElement("afterend", host);
+    }
+    return true;
+  }
   if (host.parentElement !== bar) {
     bar.appendChild(host);
   }
@@ -83,6 +92,10 @@ async function refreshHideToggle(): Promise<void> {
   const id = currentAlbumId();
   const host = document.getElementById(HOST_ID) as HTMLDivElement | null;
   if (!id || !host?.shadowRoot) return;
+  const inList = await isInHiddenList(id);
+  const sig = `${id}:${inList ? "1" : "0"}`;
+  if (host.dataset.extToggleSig === sig) return;
+  host.dataset.extToggleSig = sig;
   host.dataset.albumId = id;
   const btn = host.shadowRoot.querySelector(
     "[data-role=\"hide-list-button\"]",
@@ -94,7 +107,6 @@ async function refreshHideToggle(): Promise<void> {
     "[data-role=\"hide-list-label\"]",
   ) as HTMLElement | null;
   if (!btn || !icon || !label) return;
-  const inList = await isInHiddenList(id);
   label.textContent = inList ? "Unhide" : "Hide";
   icon.innerHTML = inList ? iconSvgEye : iconSvgEyeOff;
   btn.setAttribute(

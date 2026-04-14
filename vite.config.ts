@@ -31,7 +31,7 @@ export default defineConfig({
   publicDir: false,
   build: {
     outDir: "dist",
-    emptyOutDir: true,
+    emptyOutDir: false,
     rollupOptions: {
       input: {
         background: path.resolve(__dirname, "src/background/index.ts"),

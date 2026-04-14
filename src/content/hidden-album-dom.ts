@@ -25,6 +25,8 @@ function buildCss(ids: Set<string>, pathname: string): string {
     out.push(
       `main [data-encore-id="card"]:has(a[href="/album/${e}"]){display:none!important}`,
       `main [data-encore-id="card"]:has(a[href$="/album/${e}"]){display:none!important}`,
+      `main [data-carousel-gridlist-item="true"]:has(a[href="/album/${e}"]){display:none!important}`,
+      `main [data-carousel-gridlist-item="true"]:has(a[href$="/album/${e}"]){display:none!important}`,
     );
   }
   return out.join("\n");
