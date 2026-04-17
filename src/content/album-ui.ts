@@ -211,47 +211,19 @@ const scheduleSync = debounce(() => {
   syncAlbumPageUi();
 }, 160);
 
-let moMain: MutationObserver | null = null;
-let mainObservedEl: Element | null = null;
-
-function disconnectMainObserver(): void {
-  moMain?.disconnect();
-  moMain = null;
-}
-
-function updateAlbumObservers(): void {
-  if (!albumIdFromPathname(location.pathname)) {
-    disconnectMainObserver();
-    mainObservedEl = null;
-    return;
-  }
-  const main = document.querySelector("main");
-  if (!main) return;
-  if (mainObservedEl === main && moMain) return;
-  disconnectMainObserver();
-  mainObservedEl = main;
-  moMain = new MutationObserver(() => scheduleSync());
-  moMain.observe(main, { childList: true, subtree: true });
-}
-
 function observeSpotifyDom(): void {
-  const run = () => scheduleSync();
-  const moBody = new MutationObserver(() => {
-    updateAlbumObservers();
-    run();
-  });
+  const moBody = new MutationObserver(() => scheduleSync());
   moBody.observe(document.body, { childList: true, subtree: true });
 
   const titleEl = document.querySelector("title");
   if (titleEl) {
-    const moTitle = new MutationObserver(run);
+    const moTitle = new MutationObserver(() => scheduleSync());
     moTitle.observe(titleEl, {
       childList: true,
       subtree: true,
       characterData: true,
     });
   }
-  updateAlbumObservers();
 }
 
 function attachNavigationSync(): void {
@@ -265,7 +237,6 @@ function attachNavigationSync(): void {
 }
 
 export function syncAlbumPageUi(): void {
-  updateAlbumObservers();
   void ensureHideToggle();
 }
 

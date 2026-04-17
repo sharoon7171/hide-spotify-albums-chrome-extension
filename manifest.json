@@ -3,7 +3,7 @@
   "name": "Spotify Customization",
   "version": "1.0.0",
   "description": "Hide albums on open.spotify.com using stored album URLs from the in-player Hide control.",
-  "permissions": ["storage", "scripting"],
+  "permissions": ["storage"],
   "host_permissions": ["https://open.spotify.com/*"],
   "action": {
     "default_title": "Spotify Customization — open options"
@@ -12,5 +12,12 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
