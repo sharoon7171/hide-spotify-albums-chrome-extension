@@ -27,6 +27,12 @@ const FILTERED_HOST_SUFFIXES = ["-spclient.spotify.com"];
 
 const PATHFINDER_PATH_RE = /\/pathfinder\//;
 
+const LIBRARY_OPERATION_RE = /library/i;
+
+function isLibraryOperation(opName: string | undefined): boolean {
+  return typeof opName === "string" && LIBRARY_OPERATION_RE.test(opName);
+}
+
 const INIT_KEY = "__spotifyExtPageWorldInstalled_v1" as const;
 
 type WindowWithInit = typeof window & { [INIT_KEY]?: boolean };
@@ -118,6 +124,7 @@ async function defaultPruneAndForward(
   parsed: GraphqlBody | null,
 ): Promise<Response> {
   const response = await realFetch(request);
+  if (parsed && isLibraryOperation(parsed.operationName)) return response;
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) return response;
   try {
