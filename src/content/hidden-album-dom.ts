@@ -43,6 +43,15 @@ function paint(): void {
     document.head.appendChild(el);
   }
   el.textContent = next;
+  nudgeVirtualization();
+}
+
+function nudgeVirtualization(): void {
+  try {
+    window.dispatchEvent(new Event("resize"));
+  } catch {
+    void 0;
+  }
 }
 
 function onRoute(): void {
@@ -78,10 +87,6 @@ type WindowWithHiddenInit = typeof window & {
   [INIT_KEY]?: boolean;
 };
 
-export async function applyHiddenAlbumsFromStorage(): Promise<void> {
-  await reload();
-}
-
 export function ensureHiddenAlbumDomIntegration(): void {
   const w = window as WindowWithHiddenInit;
   if (!w[INIT_KEY]) {
@@ -95,5 +100,5 @@ export function ensureHiddenAlbumDomIntegration(): void {
     patchHistory("replaceState");
     window.addEventListener("popstate", onRoute);
   }
-  void applyHiddenAlbumsFromStorage();
+  void reload();
 }

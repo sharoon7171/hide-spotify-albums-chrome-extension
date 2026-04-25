@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n main,content \"vite build --watch\" \"vite build --config vite.content.config.ts --watch\"",
-    "build": "tsc --noEmit && rm -rf dist && concurrently -n main,content \"vite build\" \"vite build --config vite.content.config.ts\""
+    "dev": "concurrently -n main,content,page,bridge \"vite build --watch\" \"vite build --config vite.content.config.ts --watch\" \"vite build --config vite.page.config.ts --watch\" \"vite build --config vite.bridge.config.ts --watch\"",
+    "build": "tsc --noEmit && rm -rf dist && concurrently -n main,content,page,bridge \"vite build\" \"vite build --config vite.content.config.ts\" \"vite build --config vite.page.config.ts\" \"vite build --config vite.bridge.config.ts\""
   },
   "dependencies": {
     "react": "^19.2.5",

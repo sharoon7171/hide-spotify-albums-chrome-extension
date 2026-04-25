@@ -236,7 +236,7 @@ function attachNavigationSync(): void {
   }
 }
 
-export function syncAlbumPageUi(): void {
+function syncAlbumPageUi(): void {
   void ensureHideToggle();
 }
 

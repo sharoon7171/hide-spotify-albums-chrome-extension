@@ -1,9 +1,9 @@
 const FONT =
   "system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif";
 
-export const SPOTIFY_ACTION_BAR_ITEM_GAP_PX = 22;
+const SPOTIFY_ACTION_BAR_ITEM_GAP_PX = 22;
 
-export const HIDE_BUTTON_HEIGHT_PX = 36;
+const HIDE_BUTTON_HEIGHT_PX = 36;
 
 export const hideButtonShadowCss = `
 :host {
