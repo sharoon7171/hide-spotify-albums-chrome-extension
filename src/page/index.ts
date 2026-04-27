@@ -5,6 +5,7 @@ import {
 } from "@/lib/page-bridge-keys";
 import { pruneHiddenAlbums } from "./album-pruner";
 import {
+  clearDiscographyCaches,
   discographyVarsFrom,
   type GraphqlBody,
   handleDiscographyAll,
@@ -76,10 +77,12 @@ function listenForUpdates(): void {
     hiddenIds = new Set(
       data.ids.filter((x): x is string => typeof x === "string" && x.length > 0),
     );
+    clearDiscographyCaches();
   });
   window.addEventListener("storage", (event: StorageEvent) => {
     if (event.key !== HIDDEN_IDS_STORAGE_KEY) return;
     hiddenIds = readHiddenIdsFromStorage();
+    clearDiscographyCaches();
   });
 }
 

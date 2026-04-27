@@ -19,59 +19,91 @@ export type GraphqlBody = {
 };
 
 const ALBUM_URI_RE = /^spotify:album:([0-9A-Za-z]{16,32})$/;
-const MAX_BACKFILL_ROUNDS = 8;
+const FETCH_BATCH = 50;
+const MAX_FETCH_ROUNDS = 12;
 
-const offsetMaps: Map<string, Map<number, number>> = new Map();
+type DiscographyCache = {
+  items: unknown[];
+  seenItemKeys: Set<string>;
+  serverOffsetAtEnd: number;
+  serverTotal: number | null;
+  template: unknown | null;
+  exhausted: boolean;
+};
+
+const caches: Map<string, DiscographyCache> = new Map();
 
 function keyFor(vars: DiscographyAllVars): string {
   return `${vars.uri}|${vars.order ?? ""}`;
 }
 
-function getServerOffsetFor(vars: DiscographyAllVars): number {
-  const map = offsetMaps.get(keyFor(vars));
-  if (!map) return vars.offset;
-  const exact = map.get(vars.offset);
-  if (typeof exact === "number") return exact;
-  let bestClient = -1;
-  let bestServer = vars.offset;
-  for (const [c, s] of map) {
-    if (c <= vars.offset && c > bestClient) {
-      bestClient = c;
-      bestServer = s + (vars.offset - c);
-    }
+function getOrCreateCache(vars: DiscographyAllVars): DiscographyCache {
+  const key = keyFor(vars);
+  let cache = caches.get(key);
+  if (!cache) {
+    cache = {
+      items: [],
+      seenItemKeys: new Set(),
+      serverOffsetAtEnd: 0,
+      serverTotal: null,
+      template: null,
+      exhausted: false,
+    };
+    caches.set(key, cache);
   }
-  return bestServer;
+  return cache;
 }
 
-function rememberServerOffset(
-  vars: DiscographyAllVars,
-  nextClientOffset: number,
-  serverOffset: number,
-): void {
-  let map = offsetMaps.get(keyFor(vars));
-  if (!map) {
-    map = new Map();
-    offsetMaps.set(keyFor(vars), map);
-  }
-  map.set(nextClientOffset, serverOffset);
+export function clearDiscographyCaches(): void {
+  caches.clear();
+}
+
+function extractAllBlock(data: unknown): Record<string, unknown> | null {
+  const root = (data as Record<string, unknown> | null)?.["data"];
+  const artist = (root as Record<string, unknown> | null)?.["artistUnion"];
+  const disc = (artist as Record<string, unknown> | null)?.["discography"];
+  const all = (disc as Record<string, unknown> | null)?.["all"];
+  if (!all || typeof all !== "object") return null;
+  return all as Record<string, unknown>;
 }
 
 function extractAllItems(data: unknown): unknown[] {
-  const all = (data as Record<string, unknown> | null)?.["data"];
-  const artist = (all as Record<string, unknown> | null)?.["artistUnion"];
-  const disc = (artist as Record<string, unknown> | null)?.["discography"];
-  const allBlock = (disc as Record<string, unknown> | null)?.["all"];
-  const items = (allBlock as Record<string, unknown> | null)?.["items"];
+  const all = extractAllBlock(data);
+  const items = all?.["items"];
   return Array.isArray(items) ? items : [];
 }
 
-function setAllItems(data: unknown, items: unknown[]): void {
-  const root = data as Record<string, unknown> | null;
-  const block = root?.["data"] as Record<string, unknown> | undefined;
-  const artist = block?.["artistUnion"] as Record<string, unknown> | undefined;
-  const disc = artist?.["discography"] as Record<string, unknown> | undefined;
-  const all = disc?.["all"] as Record<string, unknown> | undefined;
-  if (all) all["items"] = items;
+function extractAllTotal(data: unknown): number | null {
+  const all = extractAllBlock(data);
+  const t = all?.["totalCount"];
+  return typeof t === "number" ? t : null;
+}
+
+function setAllResult(
+  template: unknown,
+  items: unknown[],
+  totalCount: number | null,
+): void {
+  const all = extractAllBlock(template);
+  if (!all) return;
+  all["items"] = items;
+  if (totalCount !== null) all["totalCount"] = totalCount;
+}
+
+function firstReleaseUri(item: unknown): string | null {
+  const releases = (item as Record<string, unknown> | null)?.["releases"] as
+    | Record<string, unknown>
+    | undefined;
+  const releaseItems = releases?.["items"];
+  if (!Array.isArray(releaseItems) || releaseItems.length === 0) return null;
+  const uri = (releaseItems[0] as Record<string, unknown> | null)?.["uri"];
+  return typeof uri === "string" ? uri : null;
+}
+
+function itemKey(item: unknown, fallbackIndex: number): string {
+  const uri = firstReleaseUri(item);
+  if (uri !== null) return uri;
+  return `idx:${fallbackIndex}`;
 }
 
 function collectAlbumIdsFromItems(items: unknown[]): Set<string> {
@@ -93,7 +125,7 @@ function collectAlbumIdsFromItems(items: unknown[]): Set<string> {
   return out;
 }
 
-function buildBackfillRequest(
+function buildFetchRequest(
   request: Request,
   parsed: GraphqlBody,
   vars: DiscographyAllVars,
@@ -104,17 +136,98 @@ function buildBackfillRequest(
     ...parsed,
     variables: { ...vars, offset, limit },
   });
-  const init: RequestInit = {
-    method: request.method,
-    headers: request.headers,
-    body,
-    credentials: request.credentials,
-    mode: request.mode,
-    cache: request.cache,
-    referrer: request.referrer,
-    referrerPolicy: request.referrerPolicy,
+  return {
+    url: request.url,
+    init: {
+      method: request.method,
+      headers: request.headers,
+      body,
+      credentials: request.credentials,
+      mode: request.mode,
+      cache: request.cache,
+      referrer: request.referrer,
+      referrerPolicy: request.referrerPolicy,
+    },
   };
-  return { url: request.url, init };
+}
+
+async function fillCache(
+  request: Request,
+  parsed: GraphqlBody,
+  vars: DiscographyAllVars,
+  hidden: Set<string>,
+  realFetch: typeof fetch,
+  cache: DiscographyCache,
+  needTotalItems: number,
+): Promise<Response | null> {
+  let lastResponse: Response | null = null;
+  for (
+    let round = 0;
+    round < MAX_FETCH_ROUNDS &&
+    cache.items.length < needTotalItems &&
+    !cache.exhausted;
+    round += 1
+  ) {
+    const remaining = needTotalItems - cache.items.length;
+    const reqLimit = Math.max(FETCH_BATCH, remaining * 2);
+    const { url, init } = buildFetchRequest(
+      request,
+      parsed,
+      vars,
+      cache.serverOffsetAtEnd,
+      reqLimit,
+    );
+    const upstream = await realFetch(url, init);
+    lastResponse = upstream;
+    let data: unknown;
+    try {
+      data = JSON.parse(await upstream.clone().text());
+    } catch {
+      return upstream;
+    }
+    const itemsBefore = extractAllItems(data);
+    const serverGot = itemsBefore.length;
+    const serverTotal = extractAllTotal(data);
+    if (serverTotal !== null) cache.serverTotal = serverTotal;
+    if (cache.template === null) cache.template = data;
+    if (serverGot === 0) {
+      cache.exhausted = true;
+      break;
+    }
+    const allIds = collectAlbumIdsFromItems(itemsBefore);
+    const hiddenIdsHere = new Set<string>();
+    for (const id of allIds) if (hidden.has(id)) hiddenIdsHere.add(id);
+    if (hiddenIdsHere.size > 0) recordHiddenInArtist(vars.uri, hiddenIdsHere);
+    pruneHiddenAlbums(data, hidden);
+    const itemsAfter = extractAllItems(data);
+    for (let i = 0; i < itemsAfter.length; i += 1) {
+      const item = itemsAfter[i];
+      const key = itemKey(item, cache.serverOffsetAtEnd + i);
+      if (cache.seenItemKeys.has(key)) continue;
+      cache.seenItemKeys.add(key);
+      cache.items.push(item);
+    }
+    cache.serverOffsetAtEnd += serverGot;
+    if (serverGot < reqLimit) cache.exhausted = true;
+    if (
+      cache.serverTotal !== null &&
+      cache.serverOffsetAtEnd >= cache.serverTotal
+    ) {
+      cache.exhausted = true;
+    }
+  }
+  return lastResponse;
+}
+
+function adjustedTotalCount(
+  cache: DiscographyCache,
+  vars: DiscographyAllVars,
+  hidden: Set<string>,
+): number {
+  if (cache.exhausted) return cache.items.length;
+  if (cache.serverTotal === null) return cache.items.length;
+  const knownHidden = countHiddenInArtist(vars.uri, hidden);
+  return Math.max(cache.items.length, cache.serverTotal - knownHidden);
 }
 
 export async function handleDiscographyAll(
@@ -124,63 +237,26 @@ export async function handleDiscographyAll(
   hidden: Set<string>,
   realFetch: typeof fetch,
 ): Promise<Response> {
-  const collected: unknown[] = [];
-  let serverOffset = getServerOffsetFor(vars);
-  let template: unknown = null;
-  let exhausted = false;
-  let lastUpstreamResponse: Response | null = null;
+  const cache = getOrCreateCache(vars);
+  const needTotal = vars.offset + vars.limit;
+  const lastResponse = await fillCache(
+    request,
+    parsed,
+    vars,
+    hidden,
+    realFetch,
+    cache,
+    needTotal,
+  );
 
-  for (
-    let round = 0;
-    round < MAX_BACKFILL_ROUNDS && collected.length < vars.limit && !exhausted;
-    round += 1
-  ) {
-    const need = vars.limit - collected.length;
-    const reqLimit = round === 0 ? vars.limit : Math.max(need * 2, 5);
-    const { url, init } = buildBackfillRequest(
-      request,
-      parsed,
-      vars,
-      serverOffset,
-      reqLimit,
-    );
-    const upstream = await realFetch(url, init);
-    lastUpstreamResponse = upstream;
-    let data: unknown;
-    try {
-      data = JSON.parse(await upstream.clone().text());
-    } catch {
-      return upstream;
-    }
-    const itemsBefore = extractAllItems(data);
-    const serverGot = itemsBefore.length;
-    if (template === null) template = data;
-    if (serverGot === 0) {
-      exhausted = true;
-      break;
-    }
-    const beforeIds = collectAlbumIdsFromItems(itemsBefore);
-    const removedIds = new Set<string>();
-    for (const id of beforeIds) if (hidden.has(id)) removedIds.add(id);
-    if (removedIds.size > 0) recordHiddenInArtist(vars.uri, removedIds);
-    pruneHiddenAlbums(data, hidden);
-    const itemsAfter = extractAllItems(data);
-    const take = itemsAfter.slice(0, need);
-    for (const t of take) collected.push(t);
-    serverOffset += serverGot;
-    if (serverGot < reqLimit) exhausted = true;
-  }
-
-  rememberServerOffset(vars, vars.offset + vars.limit, serverOffset);
-
-  if (template === null) {
-    if (lastUpstreamResponse) return lastUpstreamResponse;
+  if (cache.template === null) {
+    if (lastResponse) return lastResponse;
     return new Response(
       JSON.stringify({
         data: {
           artistUnion: {
             __typename: "Artist",
-            discography: { all: { items: [] } },
+            discography: { all: { items: [], totalCount: 0 } },
           },
         },
       }),
@@ -188,8 +264,10 @@ export async function handleDiscographyAll(
     );
   }
 
-  setAllItems(template, collected);
-  return new Response(JSON.stringify(template), {
+  const slice = cache.items.slice(vars.offset, vars.offset + vars.limit);
+  const total = adjustedTotalCount(cache, vars, hidden);
+  setAllResult(cache.template, slice, total);
+  return new Response(JSON.stringify(cache.template), {
     status: 200,
     statusText: "OK",
     headers: { "content-type": "application/json" },
