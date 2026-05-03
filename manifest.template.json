@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Spotify Customization",
+  "version": "1.0.0",
+  "description": "Hide albums on open.spotify.com using stored album URLs from the in-player Hide control. Synced via Firebase Firestore across every signed-in device.",
+  "permissions": ["identity"],
+  "host_permissions": [
+    "https://open.spotify.com/*",
+    "https://identitytoolkit.googleapis.com/*",
+    "https://securetoken.googleapis.com/*",
+    "https://firestore.googleapis.com/*",
+    "https://www.googleapis.com/*"
+  ],
+  "oauth2": {
+    "client_id": "${VITE_GOOGLE_OAUTH_CLIENT_ID}",
+    "scopes": ["openid", "email", "profile"]
+  },
+  "action": {
+    "default_title": "Spotify Customization — open options"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["page.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://www.google.com;"
+  }
+}

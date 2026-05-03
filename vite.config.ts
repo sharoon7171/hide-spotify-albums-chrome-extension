@@ -1,51 +1,85 @@
-import { copyFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 
-function copyExtensionRootFiles(): Plugin {
-  const names = ["manifest.json"];
+function buildManifest(env: Record<string, string>): Plugin {
+  const TEMPLATE = "manifest.template.json";
+  const TOKEN_RE = /\$\{(VITE_[A-Z0-9_]+)\}/g;
   return {
-    name: "copy-extension-root-files",
+    name: "build-manifest",
     writeBundle() {
-      const outDir = path.resolve(__dirname, "dist");
-      for (const name of names) {
-        const from = path.resolve(__dirname, name);
-        if (existsSync(from)) {
-          copyFileSync(from, path.join(outDir, name));
-        }
+      const templatePath = path.resolve(__dirname, TEMPLATE);
+      if (!existsSync(templatePath)) {
+        throw new Error(`[build-manifest] missing ${TEMPLATE}`);
       }
+      const raw = readFileSync(templatePath, "utf8");
+      const missing = new Set<string>();
+      const rendered = raw.replace(TOKEN_RE, (_, key: string) => {
+        const v = env[key];
+        if (!v) {
+          missing.add(key);
+          return "";
+        }
+        return v;
+      });
+      if (missing.size > 0) {
+        throw new Error(
+          `[build-manifest] missing env vars: ${[...missing].join(", ")}. ` +
+            `Copy .env.example to .env and fill them in.`,
+        );
+      }
+      try {
+        JSON.parse(rendered);
+      } catch (e) {
+        throw new Error(
+          `[build-manifest] templated manifest is not valid JSON: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+      writeFileSync(path.resolve(__dirname, "dist/manifest.json"), rendered);
     },
   };
 }
 
-export default defineConfig({
-  base: "./",
-  plugins: [tailwindcss(), react(), copyExtensionRootFiles()],
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "src"),
-    },
-  },
-  publicDir: false,
-  build: {
-    outDir: "dist",
-    emptyOutDir: false,
-    rollupOptions: {
-      input: {
-        background: path.resolve(__dirname, "src/background/index.ts"),
-        options: path.resolve(__dirname, "options.html"),
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  return {
+    base: "./",
+    plugins: [tailwindcss(), react(), buildManifest(env)],
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "src"),
       },
-      output: {
-        entryFileNames(chunk: { name: string | undefined }) {
-          if (chunk.name === "background") return "background.js";
-          if (chunk.name === "options") return "options.js";
-          return "[name].js";
+    },
+    publicDir: false,
+    build: {
+      outDir: "dist",
+      emptyOutDir: false,
+      chunkSizeWarningLimit: 2000,
+      target: "esnext",
+      minify: "terser",
+      terserOptions: {
+        compress: { drop_console: true, drop_debugger: true, passes: 2 },
+        format: { comments: false },
+      },
+      modulePreload: false,
+      cssCodeSplit: false,
+      rollupOptions: {
+        input: {
+          options: path.resolve(__dirname, "options.html"),
         },
-        chunkFileNames: "[name].js",
-        assetFileNames: "[name][extname]",
+        output: {
+          entryFileNames: "options.js",
+          assetFileNames: (asset: { name?: string }) => {
+            if (asset.name === "options.html") return "options.html";
+            if (asset.name?.endsWith(".css")) return "options.css";
+            return "[name][extname]";
+          },
+        },
       },
     },
-  },
+  };
 });

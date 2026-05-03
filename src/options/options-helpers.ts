@@ -3,13 +3,7 @@ import {
   type SavedAlbum,
 } from "@/lib/saved-albums";
 
-export function savedAlbumRowKey(a: SavedAlbum): string {
-  const id = albumIdFromSavedAlbum(a);
-  if (id) return id;
-  return `t:${a.savedAt}:${a.title ?? ""}`;
-}
-
-export function sortedAlbums(list: SavedAlbum[]): SavedAlbum[] {
+export function sortedAlbums<T extends SavedAlbum>(list: T[]): T[] {
   return [...list].sort((a, b) => b.savedAt - a.savedAt);
 }
 

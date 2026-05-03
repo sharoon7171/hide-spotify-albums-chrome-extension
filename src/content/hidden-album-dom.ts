@@ -1,13 +1,8 @@
 import { albumIdFromPathname } from "@/lib/spotify-album-url";
-import {
-  getHideAlbumTilesEnabled,
-  HIDE_ALBUM_TILES_KEY,
-} from "@/lib/extension-settings";
-import {
-  getHiddenAlbumIds,
-  getSavedAlbums,
-  SAVED_ALBUMS_KEY,
-} from "@/lib/saved-albums";
+import { readDiscographyTrackMap } from "@/lib/discography-track-map-storage";
+import { DISCOGRAPHY_TRACK_MAP_UPDATED_MESSAGE_TYPE } from "@/lib/page-bridge-keys";
+import { getHiddenAlbumIds, type SavedAlbum } from "@/lib/saved-albums";
+import { connectSync } from "@/lib/sync-port";
 
 const STYLE_ID = "spotify-ext-hide-album-css-rules";
 
@@ -16,24 +11,59 @@ let tilesOn = true;
 let lastCss = "";
 let lastPath = "";
 
+function artistIdFromPath(pathname: string): string | null {
+  const m = /\/artist\/([^/]+)\//.exec(pathname);
+  return m?.[1] ?? null;
+}
+
+/** List-mode rows use `/track/id` from discography payloads; keyed by Pathfinder ingestion in page script. */
+function trackIdsForHiddenAlbums(ids: Set<string>, pathname: string): string[] {
+  const aid = artistIdFromPath(pathname);
+  const stored = readDiscographyTrackMap();
+  if (!aid || !stored || stored.artistId !== aid) return [];
+  const out: string[] = [];
+  for (const [trackId, albumId] of Object.entries(stored.trackToAlbum)) {
+    if (ids.has(albumId)) out.push(trackId);
+  }
+  return [...new Set(out)].sort();
+}
+
 function buildCss(ids: Set<string>, pathname: string): string {
   const skip = albumIdFromPathname(pathname);
+  /** Collapse layout; discography JSON is left unpruned so totals stay in sync with the virtualizer. */
+  const hide = "display:none!important";
+  /** List / intl / full open.spotify.com links — not always `/album/id` or `…/album/id` only. */
+  const wrappers = [
+    '[data-encore-id="card"]',
+    '[data-carousel-gridlist-item="true"]',
+    '[data-encore-id="listitem"]',
+    '[role="listitem"]',
+    '[role="gridcell"]',
+  ] as const;
   const out: string[] = [];
   for (const id of [...ids].sort()) {
     if (id === skip) continue;
     const e = CSS.escape(id);
+    const link = `a[href*="/album/${e}"]`;
+    /** List layout often skips `card` / carousel wrappers; Spotify still binds rows via labelledby → `spotify:album:id`. */
+    const uriFrag = `spotify:album:${id}`;
+    out.push(`main [aria-labelledby*="${uriFrag}" i]{${hide}}`);
+    for (const w of wrappers) {
+      out.push(`main ${w}:has(${link}){${hide}}`);
+    }
+  }
+  for (const trackId of trackIdsForHiddenAlbums(ids, pathname)) {
+    const t = CSS.escape(trackId);
     out.push(
-      `main [data-encore-id="card"]:has(a[href="/album/${e}"]){display:none!important}`,
-      `main [data-encore-id="card"]:has(a[href$="/album/${e}"]){display:none!important}`,
-      `main [data-carousel-gridlist-item="true"]:has(a[href="/album/${e}"]){display:none!important}`,
-      `main [data-carousel-gridlist-item="true"]:has(a[href$="/album/${e}"]){display:none!important}`,
+      `main [data-testid="tracklist-row"]:has(a[data-testid="internal-track-link"][href*="/track/${t}"]){${hide}}`,
     );
   }
   return out.join("\n");
 }
 
 function paint(): void {
-  const next = !tilesOn || hidden.size === 0 ? "" : buildCss(hidden, location.pathname);
+  const next =
+    !tilesOn || hidden.size === 0 ? "" : buildCss(hidden, location.pathname);
   if (next === lastCss) return;
   lastCss = next;
   let el = document.getElementById(STYLE_ID);
@@ -43,29 +73,12 @@ function paint(): void {
     document.head.appendChild(el);
   }
   el.textContent = next;
-  nudgeVirtualization();
-}
-
-function nudgeVirtualization(): void {
-  try {
-    window.dispatchEvent(new Event("resize"));
-  } catch {
-    void 0;
-  }
 }
 
 function onRoute(): void {
   const p = location.pathname;
   if (p === lastPath) return;
   lastPath = p;
-  paint();
-}
-
-async function reload(): Promise<void> {
-  const albums = await getSavedAlbums();
-  hidden = getHiddenAlbumIds(albums);
-  tilesOn = await getHideAlbumTilesEnabled();
-  lastPath = location.pathname;
   paint();
 }
 
@@ -89,16 +102,37 @@ type WindowWithHiddenInit = typeof window & {
 
 export function ensureHiddenAlbumDomIntegration(): void {
   const w = window as WindowWithHiddenInit;
-  if (!w[INIT_KEY]) {
-    w[INIT_KEY] = true;
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local") return;
-      if (!changes[SAVED_ALBUMS_KEY] && !changes[HIDE_ALBUM_TILES_KEY]) return;
-      void reload();
-    });
-    patchHistory("pushState");
-    patchHistory("replaceState");
-    window.addEventListener("popstate", onRoute);
-  }
-  void reload();
+  if (w[INIT_KEY]) return;
+  w[INIT_KEY] = true;
+
+  connectSync({
+    onSnapshot: (snap) => {
+      const albums: SavedAlbum[] = Object.values(snap.albums);
+      hidden = getHiddenAlbumIds(albums);
+      tilesOn = snap.hideAlbumTiles;
+      lastPath = location.pathname;
+      paint();
+    },
+  });
+
+  window.addEventListener(
+    "message",
+    (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== location.origin) return;
+      if (
+        typeof event.data === "object" &&
+        event.data &&
+        (event.data as { type?: string }).type ===
+          DISCOGRAPHY_TRACK_MAP_UPDATED_MESSAGE_TYPE
+      ) {
+        lastCss = "";
+        paint();
+      }
+    },
+    false,
+  );
+
+  patchHistory("pushState");
+  patchHistory("replaceState");
+  window.addEventListener("popstate", onRoute);
 }

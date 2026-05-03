@@ -1,0 +1,41 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function isValidAlbum(data) {
+      return data.keys().hasOnly(['savedAt', 'url', 'title', 'updatedAt'])
+        && data.savedAt is number
+        && (!('url' in data) || (data.url is string && data.url.size() < 2048))
+        && (!('title' in data) || (data.title is string && data.title.size() < 1024))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasOnly(['hideAlbumTiles', 'updatedAt'])
+        && data.hideAlbumTiles is bool
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+
+      match /savedAlbums/{albumDocId} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && isValidAlbum(request.resource.data);
+        allow delete: if isOwner(uid);
+      }
+
+      match /settings/{docId} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && docId == 'options'
+          && isValidSettings(request.resource.data);
+      }
+    }
+  }
+}

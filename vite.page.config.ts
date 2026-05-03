@@ -12,6 +12,11 @@ export default defineConfig({
   build: {
     emptyOutDir: false,
     outDir: path.resolve(__dirname, "dist"),
+    minify: "terser",
+    terserOptions: {
+      compress: { drop_console: true, drop_debugger: true, passes: 2 },
+      format: { comments: false },
+    },
     lib: {
       entry: path.resolve(__dirname, "src/page/index.ts"),
       name: "spotifyCustomizationPage",

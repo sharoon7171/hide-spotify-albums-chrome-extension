@@ -1,8 +1,5 @@
 import {
   albumIdFromSavedAlbum,
-  getSavedAlbums,
-  SAVED_ALBUMS_KEY,
-  setSavedAlbums,
   type SavedAlbum,
 } from "@/lib/saved-albums";
 import {
@@ -14,8 +11,12 @@ import {
   iconSvgEye,
   iconSvgEyeOff,
 } from "@/content/hide-button-styles";
+import { sendToBackground } from "@/lib/messages";
+import { connectSync } from "@/lib/sync-port";
 
 const HOST_ID = "spotify-customization-album-host";
+
+let hiddenAlbums: Record<string, SavedAlbum> = {};
 
 function currentAlbumId(): string | null {
   return albumIdFromPathname(location.pathname);
@@ -30,30 +31,18 @@ function readAlbumTitle(): string {
   return head.replace(/\s*\|\s*Spotify\s*$/i, "").trim();
 }
 
-async function isInHiddenList(id: string): Promise<boolean> {
-  const list = await getSavedAlbums();
-  return list.some((a) => albumIdFromSavedAlbum(a) === id);
-}
-
-async function addToHiddenList(entry: SavedAlbum): Promise<void> {
-  const list = await getSavedAlbums();
-  const nid = albumIdFromSavedAlbum(entry);
-  if (!nid) {
-    await setSavedAlbums([
-      ...list.filter((a) => a.title !== entry.title),
-      entry,
-    ]);
-    return;
+function isHiddenLocally(id: string): boolean {
+  for (const a of Object.values(hiddenAlbums)) {
+    if (albumIdFromSavedAlbum(a) === id) return true;
   }
-  await setSavedAlbums([
-    ...list.filter((a) => albumIdFromSavedAlbum(a) !== nid),
-    entry,
-  ]);
+  return false;
 }
 
-async function removeFromHiddenList(id: string): Promise<void> {
-  const list = await getSavedAlbums();
-  await setSavedAlbums(list.filter((a) => albumIdFromSavedAlbum(a) !== id));
+function findDocIdForAlbumId(id: string): string | null {
+  for (const [docId, a] of Object.entries(hiddenAlbums)) {
+    if (albumIdFromSavedAlbum(a) === id) return docId;
+  }
+  return null;
 }
 
 function removeHost(): void {
@@ -61,13 +50,9 @@ function removeHost(): void {
 }
 
 function attachHideButtonHost(host: HTMLElement): boolean {
-  const bar = document.querySelector(
-    "main [data-testid=\"action-bar-row\"]",
-  );
+  const bar = document.querySelector("main [data-testid=\"action-bar-row\"]");
   if (!bar) return false;
-  const more = bar.querySelector<HTMLElement>(
-    "[data-testid=\"more-button\"]",
-  );
+  const more = bar.querySelector<HTMLElement>("[data-testid=\"more-button\"]");
   if (more) {
     if (more.nextElementSibling !== host) {
       more.insertAdjacentElement("afterend", host);
@@ -88,11 +73,11 @@ function applyHideButtonPresentation(
   btn.classList.add("ext-btn", albumIsHidden ? "ext-btn--unhide" : "ext-btn--hide");
 }
 
-async function refreshHideToggle(): Promise<void> {
+function refreshHideToggle(): void {
   const id = currentAlbumId();
   const host = document.getElementById(HOST_ID) as HTMLDivElement | null;
   if (!id || !host?.shadowRoot) return;
-  const inList = await isInHiddenList(id);
+  const inList = isHiddenLocally(id);
   const sig = `${id}:${inList ? "1" : "0"}`;
   if (host.dataset.extToggleSig === sig) return;
   host.dataset.extToggleSig = sig;
@@ -149,19 +134,23 @@ function buildHostShell(): HTMLDivElement {
     actionBusy = true;
     btn.disabled = true;
     try {
-      const inList = await isInHiddenList(clickId);
-      if (inList) {
-        await removeFromHiddenList(clickId);
+      if (isHiddenLocally(clickId)) {
+        const docId = findDocIdForAlbumId(clickId);
+        if (docId) {
+          const res = await sendToBackground({ kind: "albums/remove", docId });
+          if (!res.ok) console.warn("[spotify-ext] unhide failed", res);
+        }
       } else {
         const url = normalizeOpenSpotifyAlbumUrl(location.href);
         if (!url) return;
-        await addToHiddenList({
+        const entry: SavedAlbum = {
           savedAt: Date.now(),
           url,
           title: readAlbumTitle(),
-        });
+        };
+        const res = await sendToBackground({ kind: "albums/upsert", entry });
+        if (!res.ok) console.warn("[spotify-ext] hide failed", res);
       }
-      await refreshHideToggle();
     } finally {
       actionBusy = false;
       btn.disabled = false;
@@ -171,7 +160,7 @@ function buildHostShell(): HTMLDivElement {
   return host;
 }
 
-async function ensureHideToggle(): Promise<void> {
+function ensureHideToggle(): void {
   if (!albumIdFromPathname(location.pathname)) {
     removeHost();
     return;
@@ -193,7 +182,7 @@ async function ensureHideToggle(): Promise<void> {
     }
     return;
   }
-  await refreshHideToggle();
+  refreshHideToggle();
 }
 
 function debounce(fn: () => void, ms: number): () => void {
@@ -207,9 +196,7 @@ function debounce(fn: () => void, ms: number): () => void {
   };
 }
 
-const scheduleSync = debounce(() => {
-  syncAlbumPageUi();
-}, 160);
+const scheduleSync = debounce(() => syncAlbumPageUi(), 160);
 
 function observeSpotifyDom(): void {
   const moBody = new MutationObserver(() => scheduleSync());
@@ -237,7 +224,7 @@ function attachNavigationSync(): void {
 }
 
 function syncAlbumPageUi(): void {
-  void ensureHideToggle();
+  ensureHideToggle();
 }
 
 function patchHistory(fnName: "pushState" | "replaceState"): void {
@@ -260,17 +247,22 @@ type WindowWithAlbumInit = typeof window & {
 
 export function ensureAlbumPageIntegration(): void {
   const w = window as WindowWithAlbumInit;
-  if (!w[INIT_KEY]) {
-    w[INIT_KEY] = true;
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local" || !changes[SAVED_ALBUMS_KEY]) return;
-      void refreshHideToggle();
-    });
-    patchHistory("pushState");
-    patchHistory("replaceState");
-    window.addEventListener("popstate", () => syncAlbumPageUi());
-    observeSpotifyDom();
-    attachNavigationSync();
-  }
+  if (w[INIT_KEY]) return;
+  w[INIT_KEY] = true;
+
+  connectSync({
+    onSnapshot: (snap) => {
+      hiddenAlbums = snap.albums;
+      const host = document.getElementById(HOST_ID) as HTMLDivElement | null;
+      if (host) delete host.dataset.extToggleSig;
+      refreshHideToggle();
+    },
+  });
+
+  patchHistory("pushState");
+  patchHistory("replaceState");
+  window.addEventListener("popstate", () => syncAlbumPageUi());
+  observeSpotifyDom();
+  attachNavigationSync();
   syncAlbumPageUi();
 }
