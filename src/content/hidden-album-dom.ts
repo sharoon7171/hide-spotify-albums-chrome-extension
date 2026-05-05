@@ -1,64 +1,92 @@
 import { albumIdFromPathname } from "@/lib/spotify-album-url";
-import { readDiscographyTrackMap } from "@/lib/discography-track-map-storage";
-import { DISCOGRAPHY_TRACK_MAP_UPDATED_MESSAGE_TYPE } from "@/lib/page-bridge-keys";
 import { getHiddenAlbumIds, type SavedAlbum } from "@/lib/saved-albums";
 import { connectSync } from "@/lib/sync-port";
 
 const STYLE_ID = "spotify-ext-hide-album-css-rules";
+const DOM_HIDDEN_ATTR = "data-spotify-ext-hidden-album-section";
+const ALBUM_HREF_RE = /\/album\/([0-9A-Za-z]{16,32})(?:[/?#]|$)/;
 
 let hidden = new Set<string>();
 let tilesOn = true;
 let lastCss = "";
 let lastPath = "";
-
-function artistIdFromPath(pathname: string): string | null {
-  const m = /\/artist\/([^/]+)\//.exec(pathname);
-  return m?.[1] ?? null;
-}
-
-/** List-mode rows use `/track/id` from discography payloads; keyed by Pathfinder ingestion in page script. */
-function trackIdsForHiddenAlbums(ids: Set<string>, pathname: string): string[] {
-  const aid = artistIdFromPath(pathname);
-  const stored = readDiscographyTrackMap();
-  if (!aid || !stored || stored.artistId !== aid) return [];
-  const out: string[] = [];
-  for (const [trackId, albumId] of Object.entries(stored.trackToAlbum)) {
-    if (ids.has(albumId)) out.push(trackId);
-  }
-  return [...new Set(out)].sort();
-}
+let domHideTimer: ReturnType<typeof setTimeout> | undefined;
 
 function buildCss(ids: Set<string>, pathname: string): string {
   const skip = albumIdFromPathname(pathname);
-  /** Collapse layout; discography JSON is left unpruned so totals stay in sync with the virtualizer. */
   const hide = "display:none!important";
-  /** List / intl / full open.spotify.com links — not always `/album/id` or `…/album/id` only. */
   const wrappers = [
     '[data-encore-id="card"]',
     '[data-carousel-gridlist-item="true"]',
-    '[data-encore-id="listitem"]',
-    '[role="listitem"]',
-    '[role="gridcell"]',
+    '[data-testid="card-click-handler"]',
+    '[data-testid="entity-card"]',
+    '[data-testid="grid-card"]',
   ] as const;
   const out: string[] = [];
+  out.push(`main [${DOM_HIDDEN_ATTR}]{${hide}}`);
   for (const id of [...ids].sort()) {
     if (id === skip) continue;
     const e = CSS.escape(id);
     const link = `a[href*="/album/${e}"]`;
-    /** List layout often skips `card` / carousel wrappers; Spotify still binds rows via labelledby → `spotify:album:id`. */
-    const uriFrag = `spotify:album:${id}`;
-    out.push(`main [aria-labelledby*="${uriFrag}" i]{${hide}}`);
     for (const w of wrappers) {
       out.push(`main ${w}:has(${link}){${hide}}`);
     }
   }
-  for (const trackId of trackIdsForHiddenAlbums(ids, pathname)) {
-    const t = CSS.escape(trackId);
-    out.push(
-      `main [data-testid="tracklist-row"]:has(a[data-testid="internal-track-link"][href*="/track/${t}"]){${hide}}`,
-    );
-  }
   return out.join("\n");
+}
+
+function albumIdFromAlbumHref(href: string | null): string | null {
+  if (!href) return null;
+  const m = ALBUM_HREF_RE.exec(href);
+  return m?.[1] ?? null;
+}
+
+function findAlbumSectionRoot(link: HTMLAnchorElement): HTMLElement | null {
+  let cur = link.parentElement as HTMLElement | null;
+  while (cur && cur !== document.body) {
+    if (cur.tagName === "MAIN") return null;
+    const linkCount = cur.querySelectorAll('a[href*="/album/"]').length;
+    if (linkCount === 1) {
+      const cardLike = cur.matches(
+        [
+          '[data-encore-id="card"]',
+          '[data-carousel-gridlist-item="true"]',
+          '[data-testid="card-click-handler"]',
+          '[data-testid="entity-card"]',
+          '[data-testid="grid-card"]',
+        ].join(","),
+      );
+      if (cardLike) return cur;
+    }
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+function applyDomHides(ids: Set<string>, pathname: string): void {
+  const skip = albumIdFromPathname(pathname);
+  for (const el of document.querySelectorAll<HTMLElement>(`main [${DOM_HIDDEN_ATTR}]`)) {
+    el.removeAttribute(DOM_HIDDEN_ATTR);
+  }
+  if (!tilesOn || ids.size === 0) return;
+  const roots = new Set<HTMLElement>();
+  for (const link of document.querySelectorAll<HTMLAnchorElement>(
+    'main a[href*="/album/"]',
+  )) {
+    const id = albumIdFromAlbumHref(link.getAttribute("href") ?? link.href);
+    if (!id || id === skip || !ids.has(id)) continue;
+    const root = findAlbumSectionRoot(link);
+    if (root) roots.add(root);
+  }
+  for (const root of roots) root.setAttribute(DOM_HIDDEN_ATTR, "1");
+}
+
+function scheduleDomHidePass(): void {
+  if (domHideTimer !== undefined) clearTimeout(domHideTimer);
+  domHideTimer = setTimeout(() => {
+    domHideTimer = undefined;
+    applyDomHides(hidden, location.pathname);
+  }, 90);
 }
 
 function paint(): void {
@@ -73,6 +101,7 @@ function paint(): void {
     document.head.appendChild(el);
   }
   el.textContent = next;
+  applyDomHides(hidden, location.pathname);
 }
 
 function onRoute(): void {
@@ -115,24 +144,9 @@ export function ensureHiddenAlbumDomIntegration(): void {
     },
   });
 
-  window.addEventListener(
-    "message",
-    (event: MessageEvent) => {
-      if (event.source !== window || event.origin !== location.origin) return;
-      if (
-        typeof event.data === "object" &&
-        event.data &&
-        (event.data as { type?: string }).type ===
-          DISCOGRAPHY_TRACK_MAP_UPDATED_MESSAGE_TYPE
-      ) {
-        lastCss = "";
-        paint();
-      }
-    },
-    false,
-  );
-
   patchHistory("pushState");
   patchHistory("replaceState");
   window.addEventListener("popstate", onRoute);
+  const mo = new MutationObserver(() => scheduleDomHidePass());
+  mo.observe(document.body, { childList: true, subtree: true });
 }

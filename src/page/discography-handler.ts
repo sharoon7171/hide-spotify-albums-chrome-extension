@@ -7,7 +7,6 @@ export type GraphqlBody = {
   query?: unknown;
 };
 
-/** No synthetic discography paging — caches removed. Artist grid uses Spotify's native offsets. */
 export function clearDiscographyCaches(): void {}
 
 export function patchDiscographyOverview(
@@ -34,7 +33,6 @@ export function patchDiscographyOverview(
   return data;
 }
 
-/** Batched / persisted Pathfinder ops sometimes differ in casing or suffix. */
 export function isDiscographyAllOperation(opName: string | undefined): boolean {
   if (!opName) return false;
   const n = opName.toLowerCase();
@@ -43,7 +41,6 @@ export function isDiscographyAllOperation(opName: string | undefined): boolean {
   );
 }
 
-/** `…/discography/album`, `…/discography/appears-on`, intl-prefixed paths, etc. */
 export function isDiscographyPagePathname(pathname: string): boolean {
   return /\/discography\//.test(pathname);
 }

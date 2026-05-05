@@ -1,11 +1,9 @@
 import {
-  DISCOGRAPHY_TRACK_MAP_UPDATED_MESSAGE_TYPE,
   HIDDEN_IDS_MESSAGE_TYPE,
   HIDDEN_IDS_STORAGE_KEY,
   type HiddenIdsMessage,
 } from "@/lib/page-bridge-keys";
 import { pruneHiddenAlbums } from "./album-pruner";
-import { mergeDiscographyTrackMap } from "@/lib/discography-track-map-storage";
 import {
   clearDiscographyCaches,
   type GraphqlBody,
@@ -14,7 +12,6 @@ import {
   isDiscographyPagePathname,
   patchDiscographyOverview,
 } from "./discography-handler";
-import { extractDiscographyTrackAlbumMap } from "./discography-track-extract";
 
 const FILTERED_HOSTS = new Set<string>([
   "api-partner.spotify.com",
@@ -110,37 +107,6 @@ function targetUrlFromInput(input: RequestInfo | URL): URL | null {
   return null;
 }
 
-function artistIdFromArtistPath(pathname: string): string | null {
-  const m = /\/artist\/([^/]+)\//.exec(pathname);
-  return m?.[1] ?? null;
-}
-
-async function ingestDiscographyAllResponse(response: Response): Promise<void> {
-  const artistId = artistIdFromArtistPath(location.pathname);
-  if (!artistId) return;
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) return;
-  try {
-    const text = await response.clone().text();
-    if (!text) return;
-    const data = JSON.parse(text) as unknown;
-    const map = extractDiscographyTrackAlbumMap(data);
-    mergeDiscographyTrackMap(artistId, map);
-    if (isDiscographyPagePathname(location.pathname)) {
-      try {
-        window.postMessage(
-          { type: DISCOGRAPHY_TRACK_MAP_UPDATED_MESSAGE_TYPE },
-          location.origin,
-        );
-      } catch {
-        void 0;
-      }
-    }
-  } catch {
-    void 0;
-  }
-}
-
 async function parseGraphqlBody(request: Request): Promise<GraphqlBody | null> {
   if (request.method !== "POST") return null;
   try {
@@ -160,7 +126,6 @@ async function defaultPruneAndForward(
   parsed: GraphqlBody | null,
 ): Promise<Response> {
   const response = await realFetch(request);
-  /** Pruning JSON on this surface breaks offsets / totals; rely on CSS hide for tiles. */
   if (isDiscographyPagePathname(location.pathname)) return response;
   if (parsed && isLibraryOperation(parsed.operationName)) return response;
   if (parsed && isDiscographyAllOperation(parsed.operationName)) {
@@ -203,12 +168,8 @@ function patchFetch(): void {
 
     if (PATHFINDER_PATH_RE.test(url.pathname)) {
       const parsed = await parseGraphqlBody(request);
-      /** Synthetic merges break Spotify's virtualization (duplicate tiles / blank tails). Hide via CSS instead. */
       if (parsed && isDiscographyAllOperation(parsed.operationName)) {
-        const response = await realFetch(request);
-        /** List mode rows use /track/… only; scrape album→tracks from untouched JSON for CSS. */
-        await ingestDiscographyAllResponse(response);
-        return response;
+        return realFetch(request);
       }
       if (!parsed) {
         return realFetch(request);

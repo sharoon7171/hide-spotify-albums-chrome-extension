@@ -132,7 +132,16 @@ async function handleMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
         return { ok: true };
       case "settings/set-hide-tiles":
         await requireUid();
-        await setHideTilesEnabled(currentUser!.uid, msg.value);
+        {
+          const prev = snapshot.hideAlbumTiles;
+          setSnapshot({ hideAlbumTiles: msg.value });
+          try {
+            await setHideTilesEnabled(currentUser!.uid, msg.value);
+          } catch (e) {
+            setSnapshot({ hideAlbumTiles: prev });
+            throw e;
+          }
+        }
         return { ok: true };
     }
   } catch (e) {

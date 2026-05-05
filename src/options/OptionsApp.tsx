@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   albumIdFromSavedAlbum,
   type SavedAlbum,
@@ -20,7 +20,15 @@ export function OptionsApp() {
   const [busy, setBusy] = useState<{ kind: "signin" | "signout" | null }>({
     kind: null,
   });
+  const [pendingHideTiles, setPendingHideTiles] = useState<boolean | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  useEffect(() => {
+    if (pendingHideTiles === null) return;
+    if (sync.hideAlbumTiles === pendingHideTiles) {
+      setPendingHideTiles(null);
+    }
+  }, [pendingHideTiles, sync.hideAlbumTiles]);
+
 
   const albums: AlbumRow[] = useMemo(() => {
     const list: AlbumRow[] = Object.entries(sync.albums).map(([docId, a]) => ({
@@ -59,11 +67,15 @@ export function OptionsApp() {
   }, [albums.length]);
 
   const setHideTiles = useCallback(async (value: boolean) => {
+    setPendingHideTiles(value);
     const res = await sendToBackground({
       kind: "settings/set-hide-tiles",
       value,
     });
-    if (!res.ok) console.warn("[spotify-ext] set-hide-tiles failed", res);
+    if (!res.ok) {
+      setPendingHideTiles(null);
+      console.warn("[spotify-ext] set-hide-tiles failed", res);
+    }
   }, []);
 
   const signIn = useCallback(async () => {
@@ -85,6 +97,7 @@ export function OptionsApp() {
   const total = albums.length;
   const shown = filteredAlbums.length;
   const loading = !sync.ready;
+  const hideTilesEnabled = pendingHideTiles ?? sync.hideAlbumTiles;
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-zinc-50 text-zinc-900">
@@ -174,20 +187,20 @@ export function OptionsApp() {
                   </div>
                   <label className="flex shrink-0 cursor-pointer items-center gap-3 sm:pt-0.5">
                     <span className="text-xs font-medium text-zinc-700">
-                      {sync.hideAlbumTiles ? "On" : "Off"}
+                      {hideTilesEnabled ? "On" : "Off"}
                     </span>
                     <button
                       type="button"
                       role="switch"
-                      aria-checked={sync.hideAlbumTiles}
-                      onClick={() => void setHideTiles(!sync.hideAlbumTiles)}
+                      aria-checked={hideTilesEnabled}
+                      onClick={() => void setHideTiles(!hideTilesEnabled)}
                       className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
-                        sync.hideAlbumTiles ? "bg-emerald-600" : "bg-zinc-300"
+                        hideTilesEnabled ? "bg-emerald-600" : "bg-zinc-300"
                       }`}
                     >
                       <span
                         className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                          sync.hideAlbumTiles ? "translate-x-5" : "translate-x-0"
+                          hideTilesEnabled ? "translate-x-5" : "translate-x-0"
                         }`}
                       />
                     </button>
