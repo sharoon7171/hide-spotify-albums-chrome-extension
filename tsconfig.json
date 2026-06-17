@@ -17,7 +17,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "resolveJsonModule": true,
-    "types": ["chrome", "vite/client"],
+    "types": ["vite/client", "chrome"],
     "paths": {
       "@/*": ["./src/*"]
     }

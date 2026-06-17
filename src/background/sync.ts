@@ -128,7 +128,7 @@ async function handleMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
         return { ok: true };
       case "albums/clear":
         await requireUid();
-        await clearAllAlbums(currentUser!.uid, Object.keys(snapshot.albums));
+        await clearAllAlbums(currentUser!.uid);
         return { ok: true };
       case "settings/set-hide-tiles":
         await requireUid();

@@ -17,7 +17,9 @@ type AlbumRow = SavedAlbum & { docId: string };
 export function OptionsApp() {
   const sync = useFirestoreSync();
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState<{ kind: "signin" | "signout" | null }>({
+  const [busy, setBusy] = useState<{
+    kind: "signin" | "signout" | "clear" | null;
+  }>({
     kind: null,
   });
   const [pendingHideTiles, setPendingHideTiles] = useState<boolean | null>(null);
@@ -57,11 +59,13 @@ export function OptionsApp() {
     if (!albums.length) return;
     if (
       !window.confirm(
-        "Remove every stored entry? Hidden albums will show again on Spotify until you hide them from an album page.",
+        `Remove all ${albums.length} stored entries? Hidden albums will show again on Spotify until you hide them from an album page.`,
       )
     )
       return;
+    setBusy({ kind: "clear" });
     const res = await sendToBackground({ kind: "albums/clear" });
+    setBusy({ kind: null });
     if (!res.ok) console.warn("[spotify-ext] clear failed", res);
     setQuery("");
   }, [albums.length]);
@@ -133,7 +137,11 @@ export function OptionsApp() {
               <AccountBadge
                 user={sync.user}
                 ready={sync.ready}
-                busyKind={busy.kind}
+                busyKind={
+                  busy.kind === "signin" || busy.kind === "signout"
+                    ? busy.kind
+                    : null
+                }
                 onSignIn={signIn}
                 onSignOut={signOut}
               />
@@ -234,9 +242,10 @@ export function OptionsApp() {
                     <button
                       type="button"
                       onClick={() => void removeAll()}
-                      className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-800 transition hover:border-rose-300 hover:bg-rose-100"
+                      disabled={busy.kind === "clear"}
+                      className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-800 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-progress disabled:opacity-60"
                     >
-                      Clear all
+                      {busy.kind === "clear" ? "Clearing…" : "Clear all"}
                     </button>
                   </div>
                 </div>

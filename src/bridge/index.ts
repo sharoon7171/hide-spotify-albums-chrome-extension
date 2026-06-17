@@ -2,7 +2,7 @@ import {
   HIDDEN_IDS_MESSAGE_TYPE,
   HIDDEN_IDS_STORAGE_KEY,
   type HiddenIdsMessage,
-} from "@/lib/page-bridge-keys";
+} from "@/lib/hidden-album-ids";
 import { getHiddenAlbumIds, type SavedAlbum } from "@/lib/saved-albums";
 import { connectSync } from "@/lib/sync-port";
 

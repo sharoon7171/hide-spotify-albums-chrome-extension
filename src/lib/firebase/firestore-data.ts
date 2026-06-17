@@ -2,7 +2,10 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDocs,
+  limit,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
   writeBatch,
@@ -105,19 +108,22 @@ export async function removeAlbum(uid: string, docId: string): Promise<void> {
   await deleteDoc(albumDoc(uid, docId));
 }
 
-export async function clearAllAlbums(
-  uid: string,
-  knownDocIds: Iterable<string>,
-): Promise<void> {
-  const ids = [...knownDocIds];
-  if (ids.length === 0) return;
+const CLEAR_BATCH_SIZE = 450;
+
+export async function clearAllAlbums(uid: string): Promise<number> {
   const db = firestoreDb();
-  for (let i = 0; i < ids.length; i += 450) {
-    const slice = ids.slice(i, i + 450);
+  const col = albumsCol(uid);
+  let removed = 0;
+  for (;;) {
+    const snap = await getDocs(query(col, limit(CLEAR_BATCH_SIZE)));
+    if (snap.empty) break;
     const batch = writeBatch(db);
-    for (const id of slice) batch.delete(albumDoc(uid, id));
+    for (const d of snap.docs) batch.delete(d.ref);
     await batch.commit();
+    removed += snap.size;
+    if (snap.size < CLEAR_BATCH_SIZE) break;
   }
+  return removed;
 }
 
 export async function setHideTilesEnabled(
