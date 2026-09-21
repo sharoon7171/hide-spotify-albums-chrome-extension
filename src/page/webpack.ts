@@ -5,7 +5,17 @@ import {
   VIRTUAL_LIST_MODULE,
 } from "@/hiding/routes";
 
-export const VIRTUAL_LIST_NEEDLE = "itemIsValidPredicate:u=()=>!0";
+const BUNDLE_CHUNK_KEYS = [
+  "webpackChunkclient_web",
+  "rspackChunkclient_web",
+] as const;
+
+export const VIRTUAL_LIST_NEEDLE_PATTERN =
+  /itemIsValidPredicate:\w+=\(\)=>!0/;
+
+export function matchesVirtualListNeedle(source: string): boolean {
+  return VIRTUAL_LIST_NEEDLE_PATTERN.test(source);
+}
 
 type WebpackRequire = {
   (id: string | number): Record<string, unknown>;
@@ -37,6 +47,18 @@ type ModuleCacheEntry = { exports?: Record<string, unknown> };
 
 const EXPOSE_KEY = "__spotifyExtWebpackRequire" as const;
 
+type BundleChunk = { push: (args: unknown[]) => WebpackRequire };
+
+function getBundleChunk(): BundleChunk | null {
+  for (const key of BUNDLE_CHUNK_KEYS) {
+    const chunk = (globalThis as Record<string, unknown>)[key];
+    if (chunk && typeof (chunk as BundleChunk).push === "function") {
+      return chunk as BundleChunk;
+    }
+  }
+  return null;
+}
+
 function cacheWebpackRequire(req: WebpackRequire): void {
   (globalThis as typeof globalThis & { [EXPOSE_KEY]?: WebpackRequire })[
     EXPOSE_KEY
@@ -52,11 +74,7 @@ function cachedWebpackRequire(): WebpackRequire | null {
 }
 
 function obtainWebpackRequire(): WebpackRequire | null {
-  const chunk = (globalThis as typeof globalThis & {
-    webpackChunkclient_web?: unknown;
-  }).webpackChunkclient_web as
-    | { push: (args: unknown[]) => WebpackRequire }
-    | undefined;
+  const chunk = getBundleChunk();
   if (!chunk) return null;
   try {
     const req = chunk.push([
@@ -73,11 +91,7 @@ function obtainWebpackRequire(): WebpackRequire | null {
 export function getWebpackRequire(): WebpackRequire | null {
   const cached = cachedWebpackRequire();
   if (cached) return cached;
-  const chunk = (globalThis as typeof globalThis & {
-    webpackChunkclient_web?: unknown;
-  }).webpackChunkclient_web as
-    | { push: (args: unknown[]) => WebpackRequire }
-    | undefined;
+  const chunk = getBundleChunk();
   if (!chunk) return null;
   try {
     const req = chunk.push([
@@ -93,12 +107,15 @@ export function getWebpackRequire(): WebpackRequire | null {
   }
 }
 
-function findModuleIdByExportBody(needle: string): string | null {
+function findModuleIdByExportBody(): string | null {
   const req = getWebpackRequire();
   if (!req) return null;
   for (const id of Object.keys(req.m)) {
     const factory = req.m[id];
-    if (typeof factory === "function" && factory.toString().includes(needle)) {
+    if (
+      typeof factory === "function" &&
+      matchesVirtualListNeedle(factory.toString())
+    ) {
       return id;
     }
   }
@@ -142,15 +159,12 @@ function evictWebpackModule(
   delete cache[Number(moduleId)];
 }
 
-function isVirtualListFactory(
-  factory: unknown,
-  needle = VIRTUAL_LIST_NEEDLE,
-): factory is WebpackFactory {
+function isVirtualListFactory(factory: unknown): factory is WebpackFactory {
   if (typeof factory !== "function") return false;
   const tagged = factory as TaggedFactory;
   return (
     tagged.__spotifyExtVirtualList === true ||
-    factory.toString().includes(needle)
+    matchesVirtualListNeedle(factory.toString())
   );
 }
 
@@ -238,7 +252,7 @@ function createVirtualListPatch(ctx: VirtualListPatchContext) {
       const hook = mod.E;
       if (typeof hook !== "function") return false;
       if (isVirtualListExportHook(hook)) return true;
-      if (!hook.toString().includes(VIRTUAL_LIST_NEEDLE)) return false;
+      if (!matchesVirtualListNeedle(hook.toString())) return false;
       assignExportE(mod, wrapHook(hook as VirtualListHook));
       return isVirtualListExportHook(mod.E);
     } catch {
@@ -265,8 +279,7 @@ export function applyVirtualListAlbumPatch(
   if (virtualListExportPatched) return true;
 
   const patch = createVirtualListPatch(patchCtx);
-  const moduleId =
-    findModuleIdByExportBody(VIRTUAL_LIST_NEEDLE) ?? VIRTUAL_LIST_MODULE;
+  const moduleId = findModuleIdByExportBody() ?? VIRTUAL_LIST_MODULE;
 
   patch.patchFactoryMap(req.m);
   if (patch.patchModuleExport(req, moduleId)) {
@@ -277,10 +290,9 @@ export function applyVirtualListAlbumPatch(
   if (!evictAttempted) {
     evictAttempted = true;
     const roots: unknown[] = [globalThis];
-    const chunk = (globalThis as typeof globalThis & {
-      webpackChunkclient_web?: unknown[];
-    }).webpackChunkclient_web;
-    if (Array.isArray(chunk)) {
+    for (const key of BUNDLE_CHUNK_KEYS) {
+      const chunk = (globalThis as Record<string, unknown>)[key];
+      if (!Array.isArray(chunk)) continue;
       roots.push(chunk);
       for (const entry of chunk) {
         if (!Array.isArray(entry) || typeof entry[2] !== "function") continue;
@@ -397,7 +409,7 @@ export function installWebpackEarlyHooks(): void {
         if (virtualListPatch.isVirtualListExportHook(val)) return val;
         if (
           typeof val === "function" &&
-          val.toString().includes(VIRTUAL_LIST_NEEDLE)
+          matchesVirtualListNeedle(val.toString())
         ) {
           return virtualListPatch.wrapHook(val);
         }
@@ -408,11 +420,11 @@ export function installWebpackEarlyHooks(): void {
     tagged.__spotifyExtOdpHook = true;
   }
 
-  function hookChunkPush(chunk: { push: (entry: unknown) => unknown }): boolean {
-    const chunkTagged = chunk as { __spotifyExtChunkHook?: boolean };
+  function hookChunkPush(chunk: BundleChunk): boolean {
+    const chunkTagged = chunk as BundleChunk & { __spotifyExtChunkHook?: boolean };
     if (chunkTagged.__spotifyExtChunkHook) return true;
     const original = chunk.push.bind(chunk);
-    chunk.push = (entry: unknown) => {
+    chunk.push = ((entry: unknown) => {
       const tuple = entry as [
         unknown,
         Record<string, unknown> | undefined,
@@ -420,43 +432,54 @@ export function installWebpackEarlyHooks(): void {
       ];
       const modules = tuple[1];
       if (modules) virtualListPatch.patchFactoryMap(modules);
-      return original(entry);
-    };
+      return original(entry as unknown[]);
+    }) as BundleChunk["push"];
     chunkTagged.__spotifyExtChunkHook = true;
     return true;
   }
 
-  const chunk = (globalThis as typeof globalThis & {
-    webpackChunkclient_web?: unknown;
-  }).webpackChunkclient_web as { push: (entry: unknown) => unknown } | undefined;
-
-  if (chunk && hookChunkPush(chunk)) {
-    (globalThis as typeof globalThis & { __spotifyExtBootstrap?: boolean })
-      .__spotifyExtBootstrap = true;
-  } else {
+  function ensureBundleChunkPushHook(
+    key: (typeof BUNDLE_CHUNK_KEYS)[number],
+  ): void {
+    const globalRecord = globalThis as Record<string, unknown>;
+    const existing = globalRecord[key];
+    if (existing && typeof (existing as BundleChunk).push === "function") {
+      hookChunkPush(existing as BundleChunk);
+      return;
+    }
     let chunkValue: unknown;
-    Object.defineProperty(globalThis, "webpackChunkclient_web", {
-      configurable: true,
-      enumerable: true,
-      get() {
-        return chunkValue;
-      },
-      set(value) {
-        chunkValue = value;
-        Object.defineProperty(globalThis, "webpackChunkclient_web", {
-          value,
-          writable: true,
-          configurable: true,
-          enumerable: true,
-        });
-        if (value && typeof (value as { push?: unknown }).push === "function") {
-          hookChunkPush(value as { push: (entry: unknown) => unknown });
-        }
-      },
-    });
-    (globalThis as typeof globalThis & { __spotifyExtBootstrap?: boolean })
-      .__spotifyExtBootstrap = true;
+    try {
+      Object.defineProperty(globalThis, key, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return chunkValue;
+        },
+        set(value) {
+          chunkValue = value;
+          Object.defineProperty(globalThis, key, {
+            value: chunkValue,
+            writable: true,
+            configurable: true,
+            enumerable: true,
+          });
+          if (value && typeof (value as BundleChunk).push === "function") {
+            hookChunkPush(value as BundleChunk);
+          }
+        },
+      });
+    } catch {
+      if (existing && typeof (existing as BundleChunk).push === "function") {
+        hookChunkPush(existing as BundleChunk);
+      }
+    }
   }
+
+  for (const key of BUNDLE_CHUNK_KEYS) {
+    ensureBundleChunkPushHook(key);
+  }
+  (globalThis as typeof globalThis & { __spotifyExtBootstrap?: boolean })
+    .__spotifyExtBootstrap = true;
 
   hookWebpackModulesAssignment((modules) => {
     virtualListPatch.patchFactoryMap(modules);
