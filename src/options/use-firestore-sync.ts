@@ -23,6 +23,7 @@ export function useFirestoreSync(): FirestoreSyncState {
     const offSync = connectSync({
       onSnapshot: (snap) => {
         if (!alive) return;
+        if (!snap.authReady) return;
         setState({
           ready: true,
           user: snap.user,
