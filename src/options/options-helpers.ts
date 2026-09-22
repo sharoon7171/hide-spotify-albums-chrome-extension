@@ -4,10 +4,10 @@ import {
 } from "@/lib/saved-albums";
 
 export function sortedAlbums<T extends SavedAlbum>(list: T[]): T[] {
-  return [...list].sort((a, b) => b.savedAt - a.savedAt);
+  return [...list].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export function formatSavedAt(ts: number): string {
+export function formatUpdatedAt(ts: number): string {
   try {
     return new Intl.DateTimeFormat(undefined, {
       month: "short",
@@ -23,5 +23,5 @@ export function displayTitle(a: SavedAlbum): string {
   if (a.title?.trim()) return a.title.trim();
   const id = albumIdFromSavedAlbum(a);
   if (id) return id;
-  return "Untitled";
+  return "Untitled album";
 }

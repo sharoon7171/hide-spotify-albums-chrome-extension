@@ -1,19 +1,19 @@
 import { firebaseAuth, firebaseAuthReady } from "@/lib/firebase/app";
 import {
   currentUserReady,
-  signInGoogle,
+  signInWithEmail,
   signOutCurrent,
   userView,
   watchAuth,
 } from "@/lib/firebase/auth";
 import {
   clearAllAlbums,
+  loadAlbumsFromCache,
   removeAlbum,
-  setHideTilesEnabled,
   subscribeAlbums,
-  subscribeHideTiles,
   upsertAlbum,
 } from "@/lib/firebase/firestore-data";
+import { docIdForSavedAlbum } from "@/lib/saved-albums";
 import {
   SYNC_PORT_NAME,
   type FirebaseUserView,
@@ -22,12 +22,13 @@ import {
   type RuntimeResponse,
   type SyncSnapshot,
 } from "@/lib/messages";
-import type { SavedAlbum } from "@/lib/saved-albums";
+
+const HIDE_TILES_KEY = "hideAlbumTiles";
 
 let currentUser: FirebaseUserView | null = null;
 let snapshot: SyncSnapshot = { uid: null, albums: {}, hideAlbumTiles: true };
 let unsubAlbums: (() => void) | null = null;
-let unsubSettings: (() => void) | null = null;
+let syncEpoch = 0;
 const ports = new Set<chrome.runtime.Port>();
 
 function setSnapshot(next: Partial<SyncSnapshot>): void {
@@ -45,37 +46,58 @@ function broadcast(event: PortServerEvent): void {
   }
 }
 
+async function readLocalHideTiles(): Promise<boolean> {
+  const r = await chrome.storage.local.get(HIDE_TILES_KEY);
+  return r[HIDE_TILES_KEY] !== false;
+}
+
+async function writeLocalHideTiles(value: boolean): Promise<void> {
+  await chrome.storage.local.set({ [HIDE_TILES_KEY]: value });
+}
+
 function detachListeners(): void {
   unsubAlbums?.();
-  unsubSettings?.();
   unsubAlbums = null;
-  unsubSettings = null;
 }
 
 function attachListenersForUser(uid: string): void {
   detachListeners();
-  setSnapshot({ uid, albums: {}, hideAlbumTiles: true });
+  const epoch = ++syncEpoch;
+  void hydrateFromCache(uid, epoch);
   unsubAlbums = subscribeAlbums(uid, (albums) => {
-    setSnapshot({ albums });
+    if (epoch !== syncEpoch || currentUser?.uid !== uid) return;
+    setSnapshot({ uid, albums });
   });
-  unsubSettings = subscribeHideTiles(uid, (hideAlbumTiles) => {
-    setSnapshot({ hideAlbumTiles });
-  });
+}
+
+async function hydrateFromCache(uid: string, epoch: number): Promise<void> {
+  const cached = await loadAlbumsFromCache(uid);
+  if (epoch !== syncEpoch || currentUser?.uid !== uid || !cached) return;
+  setSnapshot({ uid, albums: cached });
 }
 
 function onAuthChanged(user: FirebaseUserView | null): void {
   currentUser = user;
-  broadcast({ type: "auth", user });
   if (user) {
+    if (snapshot.uid !== user.uid) {
+      snapshot = {
+        uid: user.uid,
+        albums: {},
+        hideAlbumTiles: snapshot.hideAlbumTiles,
+      };
+    }
     attachListenersForUser(user.uid);
-  } else {
-    detachListeners();
-    setSnapshot({ uid: null, albums: {}, hideAlbumTiles: true });
+    return;
   }
+  syncEpoch += 1;
+  detachListeners();
+  setSnapshot({ uid: null, albums: {} });
 }
 
 export function startSync(): void {
-  void firebaseAuthReady().then(() => {
+  void firebaseAuthReady().then(async () => {
+    const hideAlbumTiles = await readLocalHideTiles();
+    snapshot = { ...snapshot, hideAlbumTiles };
     const auth = firebaseAuth();
     onAuthChanged(userView(auth.currentUser));
     watchAuth((u) => onAuthChanged(userView(u)));
@@ -88,7 +110,6 @@ export function startSync(): void {
       ports.delete(port);
     });
     try {
-      port.postMessage({ type: "auth", user: currentUser } satisfies PortServerEvent);
       port.postMessage({ type: "sync", snapshot } satisfies PortServerEvent);
     } catch {
       ports.delete(port);
@@ -98,7 +119,11 @@ export function startSync(): void {
   chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
     const msg = raw as Partial<RuntimeMessage> | null;
     if (!msg || typeof msg.kind !== "string") return false;
-    if (!msg.kind.startsWith("auth/") && !msg.kind.startsWith("albums/") && !msg.kind.startsWith("settings/")) {
+    if (
+      !msg.kind.startsWith("auth/") &&
+      !msg.kind.startsWith("albums/") &&
+      !msg.kind.startsWith("settings/")
+    ) {
       return false;
     }
     void handleMessage(msg as RuntimeMessage).then(sendResponse);
@@ -109,40 +134,74 @@ export function startSync(): void {
 async function handleMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
   try {
     switch (msg.kind) {
-      case "auth/get-state":
-        return { ok: true, user: currentUser };
       case "auth/sign-in": {
-        const user = await signInGoogle();
-        return { ok: true, user };
+        await signInWithEmail(msg.email, msg.password);
+        return { ok: true };
       }
       case "auth/sign-out":
         await signOutCurrent();
-        return { ok: true, user: null };
-      case "albums/upsert":
-        await requireUid();
-        await upsertAlbum(currentUser!.uid, msg.entry);
         return { ok: true };
-      case "albums/remove":
+      case "albums/upsert": {
         await requireUid();
-        await removeAlbum(currentUser!.uid, msg.docId);
-        return { ok: true };
-      case "albums/clear":
-        await requireUid();
-        await clearAllAlbums(currentUser!.uid);
-        return { ok: true };
-      case "settings/set-hide-tiles":
-        await requireUid();
-        {
-          const prev = snapshot.hideAlbumTiles;
-          setSnapshot({ hideAlbumTiles: msg.value });
-          try {
-            await setHideTilesEnabled(currentUser!.uid, msg.value);
-          } catch (e) {
-            setSnapshot({ hideAlbumTiles: prev });
-            throw e;
-          }
+        const id = docIdForSavedAlbum(msg.entry);
+        const now = Date.now();
+        const entry = {
+          ...msg.entry,
+          updatedAt: now,
+        };
+        const prev = snapshot.albums[id];
+        setSnapshot({
+          albums: { ...snapshot.albums, [id]: entry },
+        });
+        try {
+          await upsertAlbum(currentUser!.uid, entry);
+        } catch (e) {
+          const albums = { ...snapshot.albums };
+          if (prev) albums[id] = prev;
+          else delete albums[id];
+          setSnapshot({ albums });
+          throw e;
         }
         return { ok: true };
+      }
+      case "albums/remove": {
+        await requireUid();
+        const prev = snapshot.albums[msg.docId];
+        if (prev) {
+          const albums = { ...snapshot.albums };
+          delete albums[msg.docId];
+          setSnapshot({ albums });
+        }
+        try {
+          await removeAlbum(currentUser!.uid, msg.docId);
+        } catch (e) {
+          if (prev) {
+            setSnapshot({
+              albums: { ...snapshot.albums, [msg.docId]: prev },
+            });
+          }
+          throw e;
+        }
+        return { ok: true };
+      }
+      case "albums/clear": {
+        await requireUid();
+        const prev = snapshot.albums;
+        const ids = Object.keys(prev);
+        setSnapshot({ albums: {} });
+        try {
+          await clearAllAlbums(currentUser!.uid, ids);
+        } catch (e) {
+          setSnapshot({ albums: prev });
+          throw e;
+        }
+        return { ok: true };
+      }
+      case "settings/set-hide-tiles": {
+        await writeLocalHideTiles(msg.value);
+        setSnapshot({ hideAlbumTiles: msg.value });
+        return { ok: true };
+      }
     }
   } catch (e) {
     return {
@@ -151,7 +210,6 @@ async function handleMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
       message: e instanceof Error ? e.message : String(e),
     };
   }
-  return { ok: false, code: "unhandled", message: "unhandled message" };
 }
 
 async function requireUid(): Promise<void> {
@@ -169,5 +227,3 @@ function getErrCode(e: unknown): string {
   }
   return "unknown";
 }
-
-export type { SavedAlbum };

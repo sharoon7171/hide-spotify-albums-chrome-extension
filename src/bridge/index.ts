@@ -1,6 +1,5 @@
 import {
   HIDDEN_IDS_MESSAGE_TYPE,
-  HIDDEN_IDS_STORAGE_KEY,
   type HiddenIdsMessage,
 } from "@/lib/hidden-album-ids";
 import { getHiddenAlbumIds, type SavedAlbum } from "@/lib/saved-albums";
@@ -16,22 +15,13 @@ function install(): void {
   w[INIT_KEY] = true;
   connectSync({
     onSnapshot: (snap) => {
-      const albums: SavedAlbum[] = Object.values(snap.albums);
+      const albumRows: SavedAlbum[] = Object.values(snap.albums);
       const ids = snap.hideAlbumTiles
-        ? [...getHiddenAlbumIds(albums)].sort()
+        ? [...getHiddenAlbumIds(albumRows)].sort()
         : [];
-      writeLocalStorage(ids);
       postIdsMessage(ids);
     },
   });
-}
-
-function writeLocalStorage(ids: string[]): void {
-  try {
-    window.localStorage.setItem(HIDDEN_IDS_STORAGE_KEY, JSON.stringify(ids));
-  } catch {
-    void 0;
-  }
 }
 
 function postIdsMessage(ids: string[]): void {

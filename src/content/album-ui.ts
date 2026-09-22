@@ -96,9 +96,7 @@ function refreshHideToggle(): void {
   icon.innerHTML = inList ? iconSvgEye : iconSvgEyeOff;
   btn.setAttribute(
     "aria-label",
-    inList
-      ? "Show this album on Spotify again by removing it from this extension"
-      : "Hide this album on Spotify by saving its album URL in this extension",
+    inList ? "Unhide this album" : "Hide this album",
   );
   applyHideButtonPresentation(btn, inList);
 }
@@ -133,23 +131,41 @@ function buildHostShell(): HTMLDivElement {
     if (!clickId) return;
     actionBusy = true;
     btn.disabled = true;
+    const prevAlbums = hiddenAlbums;
     try {
-      if (isHiddenLocally(clickId)) {
-        const docId = findDocIdForAlbumId(clickId);
-        if (docId) {
-          const res = await sendToBackground({ kind: "albums/remove", docId });
-          if (!res.ok) console.warn("[spotify-ext] unhide failed", res);
+      const docId = findDocIdForAlbumId(clickId);
+      if (docId) {
+        const next = { ...hiddenAlbums };
+        delete next[docId];
+        hiddenAlbums = next;
+        delete host.dataset.extToggleSig;
+        refreshHideToggle();
+        const res = await sendToBackground({ kind: "albums/remove", docId });
+        if (!res.ok) {
+          hiddenAlbums = prevAlbums;
+          delete host.dataset.extToggleSig;
+          refreshHideToggle();
+          console.warn("[spotify-ext] unhide failed", res);
         }
       } else {
         const url = normalizeOpenSpotifyAlbumUrl(location.href);
         if (!url) return;
+        const now = Date.now();
         const entry: SavedAlbum = {
-          savedAt: Date.now(),
+          updatedAt: now,
           url,
           title: readAlbumTitle(),
         };
+        hiddenAlbums = { ...hiddenAlbums, [clickId]: entry };
+        delete host.dataset.extToggleSig;
+        refreshHideToggle();
         const res = await sendToBackground({ kind: "albums/upsert", entry });
-        if (!res.ok) console.warn("[spotify-ext] hide failed", res);
+        if (!res.ok) {
+          hiddenAlbums = prevAlbums;
+          delete host.dataset.extToggleSig;
+          refreshHideToggle();
+          console.warn("[spotify-ext] hide failed", res);
+        }
       }
     } finally {
       actionBusy = false;
@@ -161,11 +177,7 @@ function buildHostShell(): HTMLDivElement {
 }
 
 function ensureHideToggle(): void {
-  if (!albumIdFromPathname(location.pathname)) {
-    removeHost();
-    return;
-  }
-  const id = currentAlbumId();
+  const id = albumIdFromPathname(location.pathname);
   if (!id) {
     removeHost();
     return;

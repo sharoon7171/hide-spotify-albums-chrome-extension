@@ -2,11 +2,8 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDocs,
-  limit,
+  getDocsFromCache,
   onSnapshot,
-  query,
-  serverTimestamp,
   setDoc,
   writeBatch,
   type DocumentData,
@@ -18,26 +15,42 @@ import {
   type SavedAlbum,
 } from "@/lib/saved-albums";
 
-export type AlbumDoc = SavedAlbum;
-
 const ALBUMS = "savedAlbums";
-const SETTINGS = "settings";
-const OPTIONS_DOC = "options";
-
-function userRef(uid: string) {
-  return doc(firestoreDb(), "users", uid);
-}
+const BATCH = 450;
 
 function albumsCol(uid: string) {
-  return collection(userRef(uid), ALBUMS);
+  return collection(firestoreDb(), "users", uid, ALBUMS);
 }
 
-function albumDoc(uid: string, docId: string) {
-  return doc(userRef(uid), ALBUMS, docId);
+function albumRef(uid: string, id: string) {
+  return doc(firestoreDb(), "users", uid, ALBUMS, id);
 }
 
-function settingsDoc(uid: string) {
-  return doc(userRef(uid), SETTINGS, OPTIONS_DOC);
+function albumFromData(data: DocumentData): SavedAlbum {
+  const album: SavedAlbum = {
+    updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : Date.now(),
+  };
+  if (typeof data.url === "string" && data.url.length > 0) album.url = data.url;
+  if (typeof data.title === "string" && data.title.length > 0) {
+    album.title = data.title;
+  }
+  return album;
+}
+
+function albumsFromSnap(snap: QuerySnapshot): Record<string, SavedAlbum> {
+  const albums: Record<string, SavedAlbum> = {};
+  for (const d of snap.docs) albums[d.id] = albumFromData(d.data());
+  return albums;
+}
+
+export async function loadAlbumsFromCache(
+  uid: string,
+): Promise<Record<string, SavedAlbum> | null> {
+  try {
+    return albumsFromSnap(await getDocsFromCache(albumsCol(uid)));
+  } catch {
+    return null;
+  }
 }
 
 export function subscribeAlbums(
@@ -45,94 +58,41 @@ export function subscribeAlbums(
   next: (albums: Record<string, SavedAlbum>) => void,
   error?: (e: Error) => void,
 ): () => void {
-  return onSnapshot(
-    albumsCol(uid),
-    (snap: QuerySnapshot<DocumentData>) => {
-      const out: Record<string, SavedAlbum> = {};
-      for (const d of snap.docs) {
-        const data = d.data();
-        const album: SavedAlbum = {
-          savedAt:
-            typeof data.savedAt === "number"
-              ? data.savedAt
-              : Date.now(),
-        };
-        if (typeof data.url === "string" && data.url.length > 0) {
-          album.url = data.url;
-        }
-        if (typeof data.title === "string" && data.title.length > 0) {
-          album.title = data.title;
-        }
-        out[d.id] = album;
-      }
-      next(out);
-    },
-    error,
-  );
+  return onSnapshot(albumsCol(uid), (snap) => next(albumsFromSnap(snap)), error);
 }
 
-export function subscribeHideTiles(
-  uid: string,
-  next: (enabled: boolean) => void,
-  error?: (e: Error) => void,
-): () => void {
-  return onSnapshot(
-    settingsDoc(uid),
-    (snap) => {
-      const data = snap.data();
-      if (!data) {
-        next(true);
-        return;
-      }
-      next(data.hideAlbumTiles !== false);
-    },
-    error,
-  );
-}
-
-export async function upsertAlbum(
-  uid: string,
-  entry: SavedAlbum,
-): Promise<void> {
+export function upsertAlbum(uid: string, entry: SavedAlbum): Promise<void> {
   const id = docIdForSavedAlbum(entry);
-  const payload: Record<string, unknown> = {
-    savedAt: entry.savedAt,
-    updatedAt: serverTimestamp(),
+  const data: Record<string, unknown> = {
+    updatedAt: entry.updatedAt || Date.now(),
   };
-  if (entry.url) payload.url = entry.url;
-  if (entry.title) payload.title = entry.title;
-  await setDoc(albumDoc(uid, id), payload);
+  if (entry.url) data.url = entry.url;
+  if (entry.title) data.title = entry.title;
+  return setDoc(albumRef(uid, id), data);
 }
 
-export async function removeAlbum(uid: string, docId: string): Promise<void> {
-  await deleteDoc(albumDoc(uid, docId));
+export function removeAlbum(uid: string, docId: string): Promise<void> {
+  return deleteDoc(albumRef(uid, docId));
 }
 
-const CLEAR_BATCH_SIZE = 450;
-
-export async function clearAllAlbums(uid: string): Promise<number> {
-  const db = firestoreDb();
-  const col = albumsCol(uid);
-  let removed = 0;
-  for (;;) {
-    const snap = await getDocs(query(col, limit(CLEAR_BATCH_SIZE)));
-    if (snap.empty) break;
-    const batch = writeBatch(db);
-    for (const d of snap.docs) batch.delete(d.ref);
-    await batch.commit();
-    removed += snap.size;
-    if (snap.size < CLEAR_BATCH_SIZE) break;
-  }
-  return removed;
-}
-
-export async function setHideTilesEnabled(
+export async function clearAllAlbums(
   uid: string,
-  value: boolean,
+  knownIds?: string[],
 ): Promise<void> {
-  await setDoc(
-    settingsDoc(uid),
-    { hideAlbumTiles: value, updatedAt: serverTimestamp() },
-    { merge: true },
-  );
+  let ids = knownIds ?? [];
+  if (ids.length === 0) {
+    try {
+      ids = (await getDocsFromCache(albumsCol(uid))).docs.map((d) => d.id);
+    } catch {
+      return;
+    }
+  }
+  const db = firestoreDb();
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const batch = writeBatch(db);
+    for (const id of ids.slice(i, i + BATCH)) {
+      batch.delete(albumRef(uid, id));
+    }
+    await batch.commit();
+  }
 }

@@ -1,7 +1,6 @@
 import {
-  GoogleAuthProvider,
   onAuthStateChanged,
-  signInWithCredential,
+  signInWithEmailAndPassword,
   signOut,
   type User,
 } from "firebase/auth";
@@ -13,8 +12,6 @@ export function userView(user: User | null): FirebaseUserView | null {
   return {
     uid: user.uid,
     email: user.email,
-    displayName: user.displayName,
-    photoURL: user.photoURL,
   };
 }
 
@@ -34,58 +31,20 @@ export async function currentUserReady(): Promise<User | null> {
   });
 }
 
-type AuthTokenResult = string | { token?: string };
-
-function getChromeAuthToken(interactive: boolean): Promise<string | null> {
-  return new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({ interactive }, (raw) => {
-      const err = chrome.runtime.lastError;
-      if (err) {
-        if (!interactive) {
-          resolve(null);
-          return;
-        }
-        reject(
-          Object.assign(new Error(err.message ?? "auth token failed"), {
-            code: "chrome-identity-error",
-          }),
-        );
-        return;
-      }
-      const r = raw as AuthTokenResult | undefined;
-      const token = typeof r === "string" ? r : r?.token ?? null;
-      resolve(token ?? null);
-    });
-  });
-}
-
-function removeChromeAuthToken(token: string): Promise<void> {
-  return new Promise((resolve) => {
-    chrome.identity.removeCachedAuthToken({ token }, () => resolve());
-  });
-}
-
-export async function signInGoogle(): Promise<FirebaseUserView | null> {
+export async function signInWithEmail(
+  email: string,
+  password: string,
+): Promise<FirebaseUserView | null> {
   await firebaseAuthReady();
-  const token = await getChromeAuthToken(true);
-  if (!token) {
-    throw Object.assign(new Error("no token returned"), {
-      code: "no-token",
-    });
-  }
-  try {
-    const credential = GoogleAuthProvider.credential(null, token);
-    const result = await signInWithCredential(firebaseAuth(), credential);
-    return userView(result.user);
-  } catch (e) {
-    await removeChromeAuthToken(token).catch(() => undefined);
-    throw e;
-  }
+  const result = await signInWithEmailAndPassword(
+    firebaseAuth(),
+    email.trim(),
+    password,
+  );
+  return userView(result.user);
 }
 
 export async function signOutCurrent(): Promise<void> {
   await firebaseAuthReady();
-  const token = await getChromeAuthToken(false).catch(() => null);
-  if (token) await removeChromeAuthToken(token).catch(() => undefined);
   await signOut(firebaseAuth());
 }

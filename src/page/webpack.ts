@@ -1,4 +1,4 @@
-import { readHiddenAlbumIdsEarly } from "@/lib/hidden-album-ids";
+import { hiddenAlbumIdSet } from "@/lib/hidden-album-ids";
 import {
   isDiscographyPath,
   routePathname,
@@ -10,10 +10,10 @@ const BUNDLE_CHUNK_KEYS = [
   "rspackChunkclient_web",
 ] as const;
 
-export const VIRTUAL_LIST_NEEDLE_PATTERN =
+const VIRTUAL_LIST_NEEDLE_PATTERN =
   /itemIsValidPredicate:\w+=\(\)=>!0/;
 
-export function matchesVirtualListNeedle(source: string): boolean {
+function matchesVirtualListNeedle(source: string): boolean {
   return VIRTUAL_LIST_NEEDLE_PATTERN.test(source);
 }
 
@@ -378,7 +378,7 @@ function hookWebpackModulesAssignment(
 export function installWebpackEarlyHooks(): void {
   const ALBUM_URI = /^spotify:album:([0-9A-Za-z]+)$/;
   const patchCtx = {
-    hiddenIds: readHiddenAlbumIdsEarly,
+    hiddenIds: hiddenAlbumIdSet,
     albumUriRe: ALBUM_URI,
   };
   const virtualListPatch = createVirtualListPatch(patchCtx);

@@ -1,7 +1,7 @@
 import { albumIdFromPathname } from "@/lib/spotify-album-url";
 
 export type SavedAlbum = {
-  savedAt: number;
+  updatedAt: number;
   url?: string;
   title?: string;
 };

@@ -1,13 +1,11 @@
 import {
   SYNC_PORT_NAME,
-  type FirebaseUserView,
   type PortServerEvent,
   type SyncSnapshot,
 } from "@/lib/messages";
 
-export type SyncListener = {
+type SyncListener = {
   onSnapshot?: (snapshot: SyncSnapshot) => void;
-  onAuth?: (user: FirebaseUserView | null) => void;
 };
 
 export function connectSync(listener: SyncListener): () => void {
@@ -25,9 +23,8 @@ export function connectSync(listener: SyncListener): () => void {
     }
     port.onMessage.addListener((raw: unknown) => {
       const ev = raw as PortServerEvent | null;
-      if (!ev || typeof ev.type !== "string") return;
-      if (ev.type === "auth") listener.onAuth?.(ev.user);
-      else if (ev.type === "sync") listener.onSnapshot?.(ev.snapshot);
+      if (!ev || ev.type !== "sync") return;
+      listener.onSnapshot?.(ev.snapshot);
     });
     port.onDisconnect.addListener(() => {
       port = null;

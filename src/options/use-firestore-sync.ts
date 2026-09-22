@@ -1,14 +1,11 @@
 import { useEffect, useState } from "react";
 import { firebaseAuthReady } from "@/lib/firebase/app";
-import {
-  subscribeAlbums,
-  subscribeHideTiles,
-} from "@/lib/firebase/firestore-data";
 import { watchAuth, userView } from "@/lib/firebase/auth";
 import type { FirebaseUserView } from "@/lib/messages";
 import type { SavedAlbum } from "@/lib/saved-albums";
+import { connectSync } from "@/lib/sync-port";
 
-export type FirestoreSyncState = {
+type FirestoreSyncState = {
   ready: boolean;
   user: FirebaseUserView | null;
   albums: Record<string, SavedAlbum>;
@@ -25,43 +22,37 @@ export function useFirestoreSync(): FirestoreSyncState {
 
   useEffect(() => {
     let alive = true;
-    let unsubAuth: (() => void) | null = null;
-    let unsubAlbums: (() => void) | null = null;
-    let unsubSettings: (() => void) | null = null;
-
-    const detachFirestore = () => {
-      unsubAlbums?.();
-      unsubSettings?.();
-      unsubAlbums = null;
-      unsubSettings = null;
-    };
+    let offAuth: (() => void) | null = null;
+    let offSync: (() => void) | null = null;
 
     void firebaseAuthReady().then(() => {
       if (!alive) return;
-      unsubAuth = watchAuth((u) => {
+      offAuth = watchAuth((u) => {
         if (!alive) return;
         const view = userView(u);
         setState((prev) => ({
           ...prev,
           ready: true,
           user: view,
-          ...(view ? {} : { albums: {}, hideAlbumTiles: true }),
+          ...(view ? {} : { albums: {} }),
         }));
-        detachFirestore();
-        if (!view) return;
-        unsubAlbums = subscribeAlbums(view.uid, (albums) =>
-          setState((prev) => ({ ...prev, albums })),
-        );
-        unsubSettings = subscribeHideTiles(view.uid, (hideAlbumTiles) =>
-          setState((prev) => ({ ...prev, hideAlbumTiles })),
-        );
+      });
+      offSync = connectSync({
+        onSnapshot: (snap) => {
+          if (!alive) return;
+          setState((prev) => ({
+            ...prev,
+            albums: snap.albums,
+            hideAlbumTiles: snap.hideAlbumTiles,
+          }));
+        },
       });
     });
 
     return () => {
       alive = false;
-      unsubAuth?.();
-      detachFirestore();
+      offAuth?.();
+      offSync?.();
     };
   }, []);
 

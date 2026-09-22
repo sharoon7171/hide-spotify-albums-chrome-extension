@@ -7,34 +7,20 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == uid;
     }
 
-    function isValidAlbum(data) {
-      return data.keys().hasOnly(['savedAt', 'url', 'title', 'updatedAt'])
-        && data.savedAt is number
-        && (!('url' in data) || (data.url is string && data.url.size() < 2048))
-        && (!('title' in data) || (data.title is string && data.title.size() < 1024))
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidSettings(data) {
-      return data.keys().hasOnly(['hideAlbumTiles', 'updatedAt'])
-        && data.hideAlbumTiles is bool
-        && data.updatedAt is timestamp;
+    function validAlbum() {
+      return request.resource.data.keys().hasOnly(['updatedAt', 'url', 'title'])
+        && request.resource.data.updatedAt is number
+        && (!('url' in request.resource.data) || request.resource.data.url is string)
+        && (!('title' in request.resource.data) || request.resource.data.title is string);
     }
 
     match /users/{uid} {
       allow read: if isOwner(uid);
 
-      match /savedAlbums/{albumDocId} {
+      match /savedAlbums/{albumId} {
         allow read: if isOwner(uid);
-        allow create, update: if isOwner(uid) && isValidAlbum(request.resource.data);
+        allow create, update: if isOwner(uid) && validAlbum();
         allow delete: if isOwner(uid);
-      }
-
-      match /settings/{docId} {
-        allow read: if isOwner(uid);
-        allow create, update: if isOwner(uid)
-          && docId == 'options'
-          && isValidSettings(request.resource.data);
       }
     }
   }

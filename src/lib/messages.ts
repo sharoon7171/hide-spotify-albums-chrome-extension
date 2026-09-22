@@ -3,16 +3,13 @@ import type { SavedAlbum } from "@/lib/saved-albums";
 export type FirebaseUserView = {
   uid: string;
   email: string | null;
-  displayName: string | null;
-  photoURL: string | null;
 };
 
-export type AuthMessage =
-  | { kind: "auth/sign-in" }
-  | { kind: "auth/sign-out" }
-  | { kind: "auth/get-state" };
+type AuthMessage =
+  | { kind: "auth/sign-in"; email: string; password: string }
+  | { kind: "auth/sign-out" };
 
-export type WriteMessage =
+type WriteMessage =
   | { kind: "albums/upsert"; entry: SavedAlbum }
   | { kind: "albums/remove"; docId: string }
   | { kind: "albums/clear" }
@@ -21,7 +18,7 @@ export type WriteMessage =
 export type RuntimeMessage = AuthMessage | WriteMessage;
 
 export type RuntimeResponse =
-  | { ok: true; user?: FirebaseUserView | null }
+  | { ok: true }
   | { ok: false; code: string; message: string };
 
 export async function sendToBackground(
@@ -50,6 +47,4 @@ export type SyncSnapshot = {
   hideAlbumTiles: boolean;
 };
 
-export type PortServerEvent =
-  | { type: "sync"; snapshot: SyncSnapshot }
-  | { type: "auth"; user: FirebaseUserView | null };
+export type PortServerEvent = { type: "sync"; snapshot: SyncSnapshot };

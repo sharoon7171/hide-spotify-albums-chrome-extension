@@ -24,7 +24,7 @@ export const XpuiDom = {
 
 export const VIRTUAL_LIST_MODULE = "67310" as const;
 
-export function isSearchRoute(pathname: string): boolean {
+function isSearchRoute(pathname: string): boolean {
   return XpuiRoute.search.test(pathname.trim());
 }
 

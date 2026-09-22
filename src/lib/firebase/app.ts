@@ -6,19 +6,21 @@ import {
   type Auth,
 } from "firebase/auth";
 import {
+  CACHE_SIZE_UNLIMITED,
+  enablePersistentCacheIndexAutoCreation,
+  getPersistentCacheIndexManager,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
   type Firestore,
 } from "firebase/firestore";
 import { firebaseConfig } from "./config";
-
 let cachedApp: FirebaseApp | null = null;
 let cachedDb: Firestore | null = null;
 let cachedAuth: Auth | null = null;
 let authPersistencePromise: Promise<void> | null = null;
 
-export function firebaseApp(): FirebaseApp {
+function firebaseApp(): FirebaseApp {
   if (cachedApp) return cachedApp;
   cachedApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
   return cachedApp;
@@ -28,9 +30,12 @@ export function firestoreDb(): Firestore {
   if (cachedDb) return cachedDb;
   cachedDb = initializeFirestore(firebaseApp(), {
     localCache: persistentLocalCache({
+      cacheSizeBytes: CACHE_SIZE_UNLIMITED,
       tabManager: persistentMultipleTabManager(),
     }),
   });
+  const indexManager = getPersistentCacheIndexManager(cachedDb);
+  if (indexManager) enablePersistentCacheIndexAutoCreation(indexManager);
   return cachedDb;
 }
 
