@@ -42,6 +42,7 @@ export async function sendToBackground(
 export const SYNC_PORT_NAME = "spotify-ext-sync-v1";
 
 export type SyncSnapshot = {
+  authReady: boolean;
   uid: string | null;
   user: FirebaseUserView | null;
   albums: Record<string, SavedAlbum>;
