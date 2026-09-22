@@ -43,6 +43,7 @@ export const SYNC_PORT_NAME = "spotify-ext-sync-v1";
 
 export type SyncSnapshot = {
   uid: string | null;
+  user: FirebaseUserView | null;
   albums: Record<string, SavedAlbum>;
   hideAlbumTiles: boolean;
 };
