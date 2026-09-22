@@ -1,4 +1,4 @@
-import { firebaseAuth, firebaseAuthReady } from "@/lib/firebase/app";
+import { firebaseAuth, firebaseAuthReady, firestoreDb } from "@/lib/firebase/app";
 import {
   currentUserReady,
   signInWithEmail,
@@ -27,6 +27,7 @@ const HIDE_TILES_KEY = "hideAlbumTiles";
 
 let currentUser: FirebaseUserView | null = null;
 let snapshot: SyncSnapshot = {
+  authReady: false,
   uid: null,
   user: null,
   albums: {},
@@ -65,42 +66,37 @@ function detachListeners(): void {
   unsubAlbums = null;
 }
 
-function attachListenersForUser(uid: string): void {
+async function attachListenersForUser(uid: string): Promise<void> {
   detachListeners();
   const epoch = ++syncEpoch;
-  void hydrateFromCache(uid, epoch);
+  const cached = await loadAlbumsFromCache(uid);
+  if (epoch !== syncEpoch || currentUser?.uid !== uid) return;
+  setSnapshot({
+    authReady: true,
+    uid,
+    user: currentUser,
+    albums: cached ?? {},
+  });
   unsubAlbums = subscribeAlbums(uid, (albums) => {
     if (epoch !== syncEpoch || currentUser?.uid !== uid) return;
     setSnapshot({ uid, user: currentUser, albums });
   });
 }
 
-async function hydrateFromCache(uid: string, epoch: number): Promise<void> {
-  const cached = await loadAlbumsFromCache(uid);
-  if (epoch !== syncEpoch || currentUser?.uid !== uid || !cached) return;
-  setSnapshot({ uid, user: currentUser, albums: cached });
-}
-
 function onAuthChanged(user: FirebaseUserView | null): void {
   currentUser = user;
   if (user) {
-    const switched = snapshot.uid !== user.uid;
-    if (switched) {
-      setSnapshot({
-        uid: user.uid,
-        user,
-        albums: {},
-      });
-      attachListenersForUser(user.uid);
-      return;
-    }
-    setSnapshot({ user });
-    if (!unsubAlbums) attachListenersForUser(user.uid);
+    void attachListenersForUser(user.uid);
     return;
   }
   syncEpoch += 1;
   detachListeners();
-  setSnapshot({ uid: null, user: null, albums: {} });
+  setSnapshot({
+    authReady: true,
+    uid: null,
+    user: null,
+    albums: {},
+  });
 }
 
 export function startSync(): void {
@@ -131,13 +127,16 @@ export function startSync(): void {
     return true;
   });
 
-  void firebaseAuthReady().then(async () => {
-    const hideAlbumTiles = await readLocalHideTiles();
-    snapshot = { ...snapshot, hideAlbumTiles };
-    const auth = firebaseAuth();
-    onAuthChanged(userView(auth.currentUser));
-    watchAuth((u) => onAuthChanged(userView(u)));
-  });
+  void bootSync();
+}
+
+async function bootSync(): Promise<void> {
+  firestoreDb();
+  const hideAlbumTiles = await readLocalHideTiles();
+  snapshot = { ...snapshot, hideAlbumTiles };
+  await firebaseAuthReady();
+  onAuthChanged(userView(firebaseAuth().currentUser));
+  watchAuth((u) => onAuthChanged(userView(u)));
 }
 
 async function handleMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
