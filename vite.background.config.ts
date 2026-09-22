@@ -12,14 +12,14 @@ export default defineConfig(({ mode }) => {
     base: "./",
     resolve: {
       alias: {
-        "@": path.resolve(__dirname, "src"),
+        "@": path.resolve(import.meta.dirname, "src"),
       },
     },
     define,
     publicDir: false,
     build: {
       emptyOutDir: false,
-      outDir: path.resolve(__dirname, "dist"),
+      outDir: path.resolve(import.meta.dirname, "dist"),
       chunkSizeWarningLimit: 2000,
       target: "esnext",
       minify: "terser",
@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => {
         format: { comments: false },
       },
       lib: {
-        entry: path.resolve(__dirname, "src/background/index.ts"),
+        entry: path.resolve(import.meta.dirname, "src/background/index.ts"),
         formats: ["es"],
         fileName: () => "background.js",
       },

@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Hide Albums in Spotify",
+  "version": "1.0.0",
+  "description": "Hide albums from Home, Artist, Search, and carousels on open.spotify.com. Unhide from any album page. Sign in to sync with Hide Albums in Spicetify.",
+
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq5E/ruLchwhwysqviRNKH65tX39D40QJf6V1SG6ACSmDdJK322TJWJBItIKq2o9Ohknk2yLHDNQ1iUK0YX77pTmywcwQwstRqhaepbfnlbZmLE+UgG7q3mDAJ2cfY8YKk9RitbQ9FNdLxjiO2PIsqPWvT5RNAoup2EuxaTXIoE8G0VtLJ+zOLIvqWKOX1YPz+KZqK6uhyzfHQ1NXfzZSVj6xBy+3VANw9qWb3deSzk3m0lJDEBc08RNXp2VkeTC6MAfH1ZleTzBRg4YD8Azh+ogYllgyGHOgaByKWpbnzgZTQT/L0DD6TUQnjM3yBzQNmVU4h2K/Q82x3htA172MKQIDAQAB",
+
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://open.spotify.com/*",
+    "https://firestore.googleapis.com/*",
+    "https://identitytoolkit.googleapis.com/*",
+    "https://securetoken.googleapis.com/*",
+    "https://www.googleapis.com/*"
+  ],
+
+  "action": {
+    "default_title": "Hide Albums in Spotify"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+
+  "content_scripts": [
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["page.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com;"
+  }
+}
