@@ -51,7 +51,8 @@ export function firebaseAuth(): Auth {
   return cachedAuth;
 }
 
-export function firebaseAuthReady(): Promise<void> {
-  firebaseAuth();
-  return authPersistencePromise ?? Promise.resolve();
+export async function firebaseAuthReady(): Promise<void> {
+  const auth = firebaseAuth();
+  await (authPersistencePromise ?? Promise.resolve());
+  await auth.authStateReady();
 }
