@@ -26,7 +26,12 @@ import {
 const HIDE_TILES_KEY = "hideAlbumTiles";
 
 let currentUser: FirebaseUserView | null = null;
-let snapshot: SyncSnapshot = { uid: null, albums: {}, hideAlbumTiles: true };
+let snapshot: SyncSnapshot = {
+  uid: null,
+  user: null,
+  albums: {},
+  hideAlbumTiles: true,
+};
 let unsubAlbums: (() => void) | null = null;
 let syncEpoch = 0;
 const ports = new Set<chrome.runtime.Port>();
@@ -66,43 +71,39 @@ function attachListenersForUser(uid: string): void {
   void hydrateFromCache(uid, epoch);
   unsubAlbums = subscribeAlbums(uid, (albums) => {
     if (epoch !== syncEpoch || currentUser?.uid !== uid) return;
-    setSnapshot({ uid, albums });
+    setSnapshot({ uid, user: currentUser, albums });
   });
 }
 
 async function hydrateFromCache(uid: string, epoch: number): Promise<void> {
   const cached = await loadAlbumsFromCache(uid);
   if (epoch !== syncEpoch || currentUser?.uid !== uid || !cached) return;
-  setSnapshot({ uid, albums: cached });
+  setSnapshot({ uid, user: currentUser, albums: cached });
 }
 
 function onAuthChanged(user: FirebaseUserView | null): void {
   currentUser = user;
   if (user) {
-    if (snapshot.uid !== user.uid) {
-      snapshot = {
+    const switched = snapshot.uid !== user.uid;
+    if (switched) {
+      setSnapshot({
         uid: user.uid,
+        user,
         albums: {},
-        hideAlbumTiles: snapshot.hideAlbumTiles,
-      };
+      });
+      attachListenersForUser(user.uid);
+      return;
     }
-    attachListenersForUser(user.uid);
+    setSnapshot({ user });
+    if (!unsubAlbums) attachListenersForUser(user.uid);
     return;
   }
   syncEpoch += 1;
   detachListeners();
-  setSnapshot({ uid: null, albums: {} });
+  setSnapshot({ uid: null, user: null, albums: {} });
 }
 
 export function startSync(): void {
-  void firebaseAuthReady().then(async () => {
-    const hideAlbumTiles = await readLocalHideTiles();
-    snapshot = { ...snapshot, hideAlbumTiles };
-    const auth = firebaseAuth();
-    onAuthChanged(userView(auth.currentUser));
-    watchAuth((u) => onAuthChanged(userView(u)));
-  });
-
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== SYNC_PORT_NAME) return;
     ports.add(port);
@@ -128,6 +129,14 @@ export function startSync(): void {
     }
     void handleMessage(msg as RuntimeMessage).then(sendResponse);
     return true;
+  });
+
+  void firebaseAuthReady().then(async () => {
+    const hideAlbumTiles = await readLocalHideTiles();
+    snapshot = { ...snapshot, hideAlbumTiles };
+    const auth = firebaseAuth();
+    onAuthChanged(userView(auth.currentUser));
+    watchAuth((u) => onAuthChanged(userView(u)));
   });
 }
 
