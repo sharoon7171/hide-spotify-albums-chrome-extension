@@ -68,13 +68,12 @@ Deploy `firestore.rules` from this directory to that same project. Rules allow e
 
 | Layer | What it holds |
 | --- | --- |
-| Firebase Auth (IndexedDB) | Signed-in user (`uid`); restored before album reads |
+| Firebase Auth (IndexedDB) | Local session restore via `authStateReady` (no network re-verify required to know `uid`) |
 | Firestore `users/{uid}/savedAlbums/{albumId}` | Server copy of each hidden album (`updatedAt`, optional `title` / `url`) |
-| Firestore persistent cache | Local album list for that `uid`; filled with `getDocsFromCache` (works offline once seeded) |
-| `onSnapshot` | Live sync with the server after the cache hydrate |
+| Firestore persistent cache (`CACHE_SIZE_UNLIMITED`) | Official offline IndexedDB cache ([Enable offline](https://firebase.google.com/docs/firestore/manage-data/enable-offline)); `getDocsFromCache` then `onSnapshot` |
 | `chrome.storage.local` | **Hide in Grids** only (device-local, not synced) |
 
-The **service worker** owns Auth and Firestore. It waits until Auth state is settled, hydrates albums from the persistent cache, then keeps them in sync with `onSnapshot`. Options, content, and the page bridge only receive snapshots over the extension sync port — they do not open Firebase themselves.
+The **service worker** opens Firestore with unlimited persistent cache, waits for Auth to settle locally, hydrates albums from cache, then keeps them live with `onSnapshot` (works offline once the cache is seeded). Options stays on a loading state until that first auth-ready snapshot — no parallel album mirror outside Firestore.
 
 ## Project Layout
 
